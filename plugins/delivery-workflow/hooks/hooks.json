@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/skills/dev-workflow/hooks/tdd-stop-guard.sh",
+            "statusMessage": "Checking test coverage"
+          }
+        ]
+      }
+    ]
+  }
+}

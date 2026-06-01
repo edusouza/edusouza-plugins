@@ -1,0 +1,7 @@
+{
+  "name": "design-to-ui",
+  "description": "Turn a design into UI components using atomic design. Source-agnostic (Google Stitch, a Claude Design handoff/HTML export, or an image mockup) and framework-agnostic (detects React, Vue, Svelte, Angular, Solid). Decomposes into atoms→molecules→organisms→templates→pages, reuses existing components, then verifies against the source.",
+  "version": "0.1.0",
+  "author": { "name": "Eduardo Souza" },
+  "license": "MIT"
+}
