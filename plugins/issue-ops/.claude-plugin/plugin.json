@@ -1,0 +1,7 @@
+{
+  "name": "issue-ops",
+  "description": "Turn inputs into well-structured GitHub issues: bug-rca enriches a bug issue with code + observability root-cause analysis (diagnosis only), and spec-to-issues converts a spec/PRD folder into an Epic→Spec→Task hierarchy with acceptance criteria, sizes, and dependencies.",
+  "version": "0.1.0",
+  "author": { "name": "Eduardo Souza" },
+  "license": "MIT"
+}
