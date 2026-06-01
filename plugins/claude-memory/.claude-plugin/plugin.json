@@ -1,0 +1,7 @@
+{
+  "name": "claude-memory",
+  "description": "Three-tier cross-session memory for Claude Code. SessionEnd captures each session (git metadata + transcript snapshot); a weekly consolidation folds captures into redacted narrative rollups and distills durable decision-heuristics; everything relevant is auto-injected at session start. Per-project, opt-in, local-only.",
+  "version": "0.1.0",
+  "author": { "name": "Eduardo Souza" },
+  "license": "MIT"
+}

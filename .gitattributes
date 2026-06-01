@@ -1,0 +1,8 @@
+# Shell scripts and hook scripts must stay LF, even on Windows clones,
+# or Claude Code's bash hook runner breaks on CR.
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Normalize other text files
+*.md text
+*.json text
