@@ -26,9 +26,9 @@ working directory, then use `~/.claude/projects/<hash>/memory`.
 
 ## Enabling a project (opt-in)
 
-Memory is captured ONLY for projects that have been initialized. To enable the current project, run:
-`memory-init.sh` (on PATH when the plugin is enabled). It creates the memory dir and seeds it; from
-then on the SessionEnd capture and SessionStart recall hooks are active for that project.
+Memory is captured ONLY for projects that have been initialized. To enable the current project, run
+the slash command `/claude-memory:init`. It creates the memory dir and seeds it; from then on the
+SessionEnd capture and SessionStart recall hooks are active for that project.
 
 ## Mode 1 — Recall / search
 
@@ -95,6 +95,7 @@ redact.
 
 ## Weekly consolidation (not this skill)
 
-Tier-2 + Tier-3 batch consolidation is run by `memory-consolidate.sh` (on PATH), which runs headless
-from a clean cwd. With no argument it consolidates every memory-enabled project; pass a memory dir to
-target one. This skill is for *interactive* recall and ad-hoc curation only.
+Tier-2 + Tier-3 batch consolidation is run by the `/claude-memory:consolidate` command, which does
+the rollup/distill in the live session and delegates the heavy transcript reading to subagents. With
+no argument it consolidates the current project; pass a memory dir to target one, or `all` for every
+memory-enabled project. This skill is for *interactive* recall and ad-hoc curation only.

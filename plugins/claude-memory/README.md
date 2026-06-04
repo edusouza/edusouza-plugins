@@ -21,14 +21,19 @@ durable heuristics it has learned.
 
 - **Tier 1 — recent sessions.** A `SessionEnd` hook (`memory-capture.sh`) records git metadata + a
   raw transcript snapshot into a per-project, user-local memory dir. No LLM, no recursion, instant.
-- **Tier 2 — last week.** `memory-consolidate.sh` folds the week's captures into one redacted
-  narrative rollup, then archives the captures and deletes the raw snapshots.
+- **Tier 2 — last week.** The `/claude-memory:consolidate` command folds the week's captures into one
+  redacted narrative rollup, then archives the captures and deletes the raw snapshots.
 - **Tier 3 — abstractions.** The same consolidation distills durable *decision heuristics* into
   `concept_*.md`, indexed in `MEMORY.md`, which Claude Code auto-loads every session. Stale concepts
   decay to `dormant`.
 - **Recall.** A `SessionStart` hook (`memory-inject.sh`) injects the last 1–2 sessions + the latest
   weekly rollup, and reminds you when consolidation is overdue. The `/claude-memory:memory` skill
   does on-demand search and ad-hoc concept promotion.
+
+The two things *you* trigger — enabling a project and running the weekly consolidation — are
+**slash commands** (`/claude-memory:init`, `/claude-memory:consolidate`), so there are no scripts to
+put on `PATH`. The two lifecycle hooks remain shell scripts because the harness fires them
+automatically on session start/end.
 
 Memory is **per-project**, **opt-in**, and **local-only** (lives under `~/.claude/projects/<hash>/memory/`,
 never committed to a repo).
@@ -48,31 +53,35 @@ Or via a marketplace (add `.claude-plugin/marketplace.json` to a git repo, then)
 
 ## Enable for a project
 
-Memory captures only for projects you opt in. From the project root:
+Memory captures only for projects you opt in. From the project, run the slash command:
 
-```bash
-memory-init.sh
+```
+/claude-memory:init
 ```
 
-(That script is on `PATH` once the plugin is enabled.)
+(Pass a path to enable a different project: `/claude-memory:init /path/to/proj`.)
 
 ## Weekly consolidation
 
 There is no background daemon. When you start a session and consolidation is overdue (>7 days with
 pending captures), the SessionStart hook prints a one-line reminder. Run:
 
-```bash
-memory-consolidate.sh            # all enabled projects
-memory-consolidate.sh <memdir>   # one project
+```
+/claude-memory:consolidate            # the current project (default)
+/claude-memory:consolidate all        # every memory-enabled project
+/claude-memory:consolidate <memdir>   # one specific memory dir
 ```
 
-This calls `claude -p` headlessly, so it spends tokens — run it when prompted, or wire it to your OS
-scheduler if you prefer true cron.
+The command does the rollup/distill work in your live session, delegating the heavy reading to
+subagents so it doesn't flood your context — so it spends tokens. Run it when prompted.
 
 ## Requirements
 
-- `python` (3.x) and `claude` on `PATH`.
-- A POSIX shell (git-bash on Windows). The scripts handle Windows path quirks (`cygpath`, CRLF).
+- `python` (3.x) on `PATH` — used by the lifecycle hook scripts and by the consolidation command's
+  deterministic file-bucketing steps.
+- A POSIX shell (git-bash on Windows) for the two lifecycle hooks. They handle Windows path quirks
+  (`cygpath`, CRLF). The `/claude-memory:*` commands run inside Claude Code itself, so they don't
+  depend on a shell beyond the small `python` snippets they invoke.
 
 ## Safety notes
 
@@ -81,8 +90,10 @@ scheduler if you prefer true cron.
   secrets/PII/confidential data.
 - Memory injected at session start is sent to the model API — but that is ≤ the exposure that already
   occurred when the original transcript was created.
-- The consolidation's headless `claude -p` is guarded by `CLAUDE_MEMORY_CONSOLIDATING=1`, which makes
-  this plugin's own hooks no-op during consolidation (no recursion).
+- `/claude-memory:consolidate` reads raw transcripts inside short-lived **subagents**, which don't
+  fire this plugin's session hooks — so there's no recursion to guard against. (The legacy
+  `CLAUDE_MEMORY_CONSOLIDATING=1` guard still lives in the hook scripts for any old headless run; it's
+  harmless otherwise.)
 
 ## License
 
