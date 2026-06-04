@@ -65,7 +65,7 @@ PY
     echo ""
     echo "## Memory - consolidation overdue"
     echo "$PENDING_CNT session capture(s) await rollup; last weekly consolidation was >=7 days ago (or never)."
-    echo "Run:  memory-consolidate.sh   (or use the /claude-memory:memory skill)."
+    echo "Run:  /claude-memory:consolidate   (or use the /claude-memory:memory skill)."
   fi
 } || true
 

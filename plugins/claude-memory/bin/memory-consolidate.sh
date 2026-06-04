@@ -6,8 +6,9 @@
 # unaffected by cwd or --settings), and both check that guard and no-op. The clean
 # temp cwd additionally keeps any *project* hooks (e.g. a Stop test guard) out of scope.
 #
-# Usage:
-#   memory-consolidate.sh                 # consolidate ALL memory-enabled projects
+# Usage (normally invoked via the /claude-memory:consolidate command):
+#   memory-consolidate.sh                 # consolidate the CURRENT project (derived from $PWD)
+#   memory-consolidate.sh all             # consolidate ALL memory-enabled projects
 #   memory-consolidate.sh <MEMORY_DIR>    # consolidate one project's memory dir
 set -uo pipefail
 export CLAUDE_MEMORY_CONSOLIDATING=1
@@ -113,15 +114,32 @@ PY
 }
 
 # -------- target selection --------
+# No arg (or empty) -> the CURRENT project, derived from $PWD the same way memory-init.sh
+# (and Claude Code) name project dirs: replace : \ / with '-'. The literal "all" -> every
+# memory-enabled project. Anything else is treated as an explicit memory dir.
 declare -a TARGETS=()
-if [[ $# -ge 1 ]]; then
-  TARGETS=("$@")
-else
+if [[ $# -eq 0 || -z "${1:-}" ]]; then
+  if command -v cygpath >/dev/null 2>&1; then
+    WIN="$(cygpath -w "$PWD" 2>/dev/null || echo "$PWD")"
+  else
+    WIN="$PWD"
+  fi
+  HASH="$(printf '%s' "$WIN" | sed 's#[:\\/]#-#g')"
+  CUR="$HOME/.claude/projects/$HASH/memory"
+  if [[ ! -d "$CUR" ]]; then
+    echo "memory-consolidate: this project is not memory-enabled. Run /claude-memory:init here first."
+    echo "  (looked for: $CUR)"
+    exit 0
+  fi
+  TARGETS=("$CUR")
+elif [[ "$1" == "all" ]]; then
   for d in "$HOME"/.claude/projects/*/memory; do [[ -d "$d" ]] && TARGETS+=("$d"); done
-fi
-if [[ ${#TARGETS[@]} -eq 0 ]]; then
-  echo "memory-consolidate: no memory-enabled projects found (run memory-init.sh in a project first)."
-  exit 0
+  if [[ ${#TARGETS[@]} -eq 0 ]]; then
+    echo "memory-consolidate: no memory-enabled projects found (run /claude-memory:init in a project first)."
+    exit 0
+  fi
+else
+  TARGETS=("$@")
 fi
 for t in "${TARGETS[@]}"; do consolidate_one "$t"; done
 echo "consolidation complete ($(date +%Y-%m-%d))."

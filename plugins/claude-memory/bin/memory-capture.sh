@@ -6,7 +6,7 @@
 # test-coverage guard). Always exits 0 so it can't block session end.
 #
 # Opt-in: only captures for projects whose memory dir already exists (run
-# `memory-init.sh` once in a project to enable it).
+# `/claude-memory:init` once in a project to enable it).
 set -uo pipefail
 
 # --- recursion guard: never run inside a headless consolidation invocation ---
