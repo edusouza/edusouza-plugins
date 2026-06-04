@@ -72,16 +72,18 @@ pending captures), the SessionStart hook prints a one-line reminder. Run:
 /claude-memory:consolidate <memdir>   # one specific memory dir
 ```
 
-The command does the rollup/distill work in your live session, delegating the heavy reading to
-subagents so it doesn't flood your context — so it spends tokens. Run it when prompted.
+The command runs the bundled `memory-consolidate.sh` in a **background subagent** (keeping the heavy
+output out of your main session). The script is deterministic — it buckets captures by ISO week and
+calls `claude -p` headlessly per week to produce the rollups and distillation — so it spends tokens.
+Run it when prompted.
 
 ## Requirements
 
-- `python` (3.x) on `PATH` — used by the lifecycle hook scripts and by the consolidation command's
-  deterministic file-bucketing steps.
-- A POSIX shell (git-bash on Windows) for the two lifecycle hooks. They handle Windows path quirks
-  (`cygpath`, CRLF). The `/claude-memory:*` commands run inside Claude Code itself, so they don't
-  depend on a shell beyond the small `python` snippets they invoke.
+- `python` (3.x) and `claude` on `PATH`. `python` is used by the lifecycle hooks and the
+  consolidation script's bucketing; `claude` is invoked headlessly by the consolidation script.
+- A POSIX shell (git-bash on Windows) — the lifecycle hooks and the `init`/`consolidate` scripts run
+  in bash. They handle Windows path quirks (`cygpath`, CRLF). The slash commands invoke these scripts
+  by absolute path via the plugin root, so nothing needs to be on `PATH`.
 
 ## Safety notes
 
@@ -90,10 +92,8 @@ subagents so it doesn't flood your context — so it spends tokens. Run it when 
   secrets/PII/confidential data.
 - Memory injected at session start is sent to the model API — but that is ≤ the exposure that already
   occurred when the original transcript was created.
-- `/claude-memory:consolidate` reads raw transcripts inside short-lived **subagents**, which don't
-  fire this plugin's session hooks — so there's no recursion to guard against. (The legacy
-  `CLAUDE_MEMORY_CONSOLIDATING=1` guard still lives in the hook scripts for any old headless run; it's
-  harmless otherwise.)
+- The consolidation's headless `claude -p` is guarded by `CLAUDE_MEMORY_CONSOLIDATING=1`, which makes
+  this plugin's own SessionStart/SessionEnd hooks no-op during consolidation (no recursion).
 
 ## License
 

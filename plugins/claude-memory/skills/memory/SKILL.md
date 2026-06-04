@@ -95,7 +95,8 @@ redact.
 
 ## Weekly consolidation (not this skill)
 
-Tier-2 + Tier-3 batch consolidation is run by the `/claude-memory:consolidate` command, which does
-the rollup/distill in the live session and delegates the heavy transcript reading to subagents. With
-no argument it consolidates the current project; pass a memory dir to target one, or `all` for every
-memory-enabled project. This skill is for *interactive* recall and ad-hoc curation only.
+Tier-2 + Tier-3 batch consolidation is run by the `/claude-memory:consolidate` command, which
+executes the bundled `memory-consolidate.sh` (deterministic bash; headless `claude -p` per week) in a
+background subagent. With no argument it consolidates the current project; pass a memory dir to target
+one, or `all` for every memory-enabled project. This skill is for *interactive* recall and ad-hoc
+curation only.
