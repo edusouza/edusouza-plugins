@@ -7,9 +7,13 @@ disable-model-invocation: true
 
 # Enable memory for this project
 
-The deterministic work is done by the bundled script — this command just runs it:
+The deterministic work is done by the bundled script — this command just runs it. The resolver tries
+the plugin-root env var first, then the skill-dir fallback, so it works regardless of which one
+Claude Code sets in the injection context:
 
-!`"${CLAUDE_PLUGIN_ROOT}/bin/memory-init.sh" "$ARGUMENTS"`
+!`for R in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_SKILL_DIR:-}/.."; do [ -n "$R" ] && [ -x "$R/bin/memory-init.sh" ] && exec "$R/bin/memory-init.sh" "$ARGUMENTS"; done; echo "ERROR: could not locate memory-init.sh — CLAUDE_PLUGIN_ROOT='${CLAUDE_PLUGIN_ROOT:-}' CLAUDE_SKILL_DIR='${CLAUDE_SKILL_DIR:-}'"`
 
-Relay the script output above to the user. It reports whether memory was newly enabled or was
-already active, and the resolved memory dir path. An empty argument means "the current project".
+Relay the script output above to the user. On success it reports whether memory was newly enabled or
+was already active, and the resolved memory dir path (an empty argument means "the current project").
+If the line starts with `ERROR:`, neither path variable resolved — tell the user the two values shown
+so the command's resolver can be fixed.

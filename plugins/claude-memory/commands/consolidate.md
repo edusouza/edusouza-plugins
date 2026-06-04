@@ -7,13 +7,17 @@ disable-model-invocation: true
 
 # Weekly memory consolidation
 
-The consolidation script, with its absolute path resolved at load time:
+The consolidation script, with its absolute path resolved at load time (tries the plugin-root env
+var first, then the skill-dir fallback):
 
-!`echo "${CLAUDE_PLUGIN_ROOT}/bin/memory-consolidate.sh"`
+!`for R in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_SKILL_DIR:-}/.."; do [ -n "$R" ] && [ -x "$R/bin/memory-consolidate.sh" ] && { echo "$R/bin/memory-consolidate.sh"; exit 0; }; done; echo "ERROR: could not locate memory-consolidate.sh — CLAUDE_PLUGIN_ROOT='${CLAUDE_PLUGIN_ROOT:-}' CLAUDE_SKILL_DIR='${CLAUDE_SKILL_DIR:-}'"`
 
-All the deterministic work lives in that bash script — your only job is to launch it without
-flooding this session. Spawn a **background subagent** (Task tool, `run_in_background: true`) with a
-clean context and give it this task, substituting the concrete script path printed above for
+If the line above starts with `ERROR:`, neither path variable resolved — report the two values shown
+to the user and stop (do not spawn the subagent).
+
+Otherwise, all the deterministic work lives in that bash script — your only job is to launch it
+without flooding this session. Spawn a **background subagent** (Task tool, `run_in_background: true`)
+with a clean context and give it this task, substituting the concrete script path printed above for
 `<SCRIPT>` and the user's argument string for `<ARGS>` (the raw `$ARGUMENTS` for this command — may
 be empty):
 
