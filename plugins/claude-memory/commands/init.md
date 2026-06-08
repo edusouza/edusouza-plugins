@@ -11,7 +11,7 @@ The deterministic work is done by the bundled script — this command just runs 
 the plugin-root env var first, then the skill-dir fallback, so it works regardless of which one
 Claude Code sets in the injection context:
 
-!`for R in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_SKILL_DIR:-}/.."; do [ -n "$R" ] && [ -x "$R/bin/memory-init.sh" ] && exec "$R/bin/memory-init.sh" "$ARGUMENTS"; done; echo "ERROR: could not locate memory-init.sh — CLAUDE_PLUGIN_ROOT='${CLAUDE_PLUGIN_ROOT:-}' CLAUDE_SKILL_DIR='${CLAUDE_SKILL_DIR:-}'"`
+!`for R in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_SKILL_DIR:-}/.." "$(find "$HOME/.claude/plugins/cache/edusouza-plugins/claude-memory" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort | tail -1)"; do [ -n "$R" ] && [ -x "$R/bin/memory-init.sh" ] && exec "$R/bin/memory-init.sh" "$ARGUMENTS"; done; echo "ERROR: could not locate memory-init.sh — CLAUDE_PLUGIN_ROOT='${CLAUDE_PLUGIN_ROOT:-}' CLAUDE_SKILL_DIR='${CLAUDE_SKILL_DIR:-}'"`
 
 Relay the script output above to the user. On success it reports whether memory was newly enabled or
 was already active, and the resolved memory dir path (an empty argument means "the current project").

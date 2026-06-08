@@ -10,7 +10,7 @@ disable-model-invocation: true
 The consolidation script, with its absolute path resolved at load time (tries the plugin-root env
 var first, then the skill-dir fallback):
 
-!`for R in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_SKILL_DIR:-}/.."; do [ -n "$R" ] && [ -x "$R/bin/memory-consolidate.sh" ] && { echo "$R/bin/memory-consolidate.sh"; exit 0; }; done; echo "ERROR: could not locate memory-consolidate.sh — CLAUDE_PLUGIN_ROOT='${CLAUDE_PLUGIN_ROOT:-}' CLAUDE_SKILL_DIR='${CLAUDE_SKILL_DIR:-}'"`
+!`for R in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_SKILL_DIR:-}/.." "$(find "$HOME/.claude/plugins/cache/edusouza-plugins/claude-memory" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort | tail -1)"; do [ -n "$R" ] && [ -x "$R/bin/memory-consolidate.sh" ] && { echo "$R/bin/memory-consolidate.sh"; exit 0; }; done; echo "ERROR: could not locate memory-consolidate.sh — CLAUDE_PLUGIN_ROOT='${CLAUDE_PLUGIN_ROOT:-}' CLAUDE_SKILL_DIR='${CLAUDE_SKILL_DIR:-}'"`
 
 If the line above starts with `ERROR:`, neither path variable resolved — report the two values shown
 to the user and stop (do not spawn the subagent).
