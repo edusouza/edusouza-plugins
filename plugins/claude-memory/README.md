@@ -19,8 +19,10 @@ durable heuristics it has learned.
 
 ## How it works
 
-- **Tier 1 — recent sessions.** A `SessionEnd` hook (`memory-capture.sh`) records git metadata + a
-  raw transcript snapshot into a per-project, user-local memory dir. No LLM, no recursion, instant.
+- **Tier 1 — recent sessions.** Each session is captured (git metadata + a raw transcript snapshot)
+  into a per-project, user-local memory dir. No LLM, no recursion, instant. Capture happens on two
+  hooks for reliability (see below): a best-effort `SessionEnd` (`memory-capture.sh`) and a
+  guaranteed `SessionStart` catch-up sweep (`memory-catchup.sh`).
 - **Tier 2 — last week.** `memory-consolidate.sh` folds the week's captures into one redacted
   narrative rollup, then archives the captures and deletes the raw snapshots.
 - **Tier 3 — abstractions.** The same consolidation distills durable *decision heuristics* into
@@ -29,9 +31,37 @@ durable heuristics it has learned.
 - **Recall.** A `SessionStart` hook (`memory-inject.sh`) injects the last 1–2 sessions + the latest
   weekly rollup, and reminds you when consolidation is overdue. The `/claude-memory:memory` skill
   does on-demand search and ad-hoc concept promotion.
+- **Narrative nudge.** A `Stop` hook (`memory-narrative-nudge.sh`) fires once per substantial session
+  to have Claude write the end-of-session narrative (the *reasoning*: decisions, dead-ends, lessons).
+  This can't happen at exit — `SessionEnd` can't invoke the model — so it rides the `Stop` event.
 
 Memory is **per-project**, **opt-in**, and **local-only** (lives under `~/.claude/projects/<hash>/memory/`,
 never committed to a repo).
+
+## Why capture runs on *two* hooks
+
+`SessionEnd` is unreliable on exit in current Claude Code: `/exit` doesn't fire it at all, Ctrl+C
+cancels it mid-run, and async/detached work in it is killed before completing (anthropics/claude-code
+issues [#35892](https://github.com/anthropics/claude-code/issues/35892),
+[#32712](https://github.com/anthropics/claude-code/issues/32712),
+[#41577](https://github.com/anthropics/claude-code/issues/41577); detaching via `nohup`/`disown`
+does **not** survive on Windows/cygwin either — the child is reaped with the hook).
+
+The fix doesn't depend on `SessionEnd` firing. The transcript `.jsonl` persists on disk no matter how
+a session ends, and `SessionStart` *does* fire reliably — so on each start the **catch-up sweep**
+re-captures any prior session that has no note yet. `SessionEnd` is kept only as a synchronous
+best-effort fast-path (atomic temp-then-rename writes mean a mid-run kill leaves no partial file).
+Net: every session is captured at the latest by the next session's start. The LLM narrative ritual
+likewise moved off exit onto the `Stop` nudge.
+
+## Tuning (environment variables)
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `CLAUDE_MEMORY_NO_NUDGE` | unset | Set to disable the end-of-session narrative nudge entirely. |
+| `CLAUDE_MEMORY_NUDGE_MIN_TURNS` | `6` | Assistant-turn threshold below which a session is too trivial to nudge. |
+| `CLAUDE_MEMORY_CATCHUP_MAX` | `25` | Max sessions the catch-up sweep captures per start (the rest drain on later starts). |
+| `CLAUDE_MEMORY_CATCHUP_MIN_AGE` | `120` | Seconds; transcripts modified more recently are skipped as the in-flight session. |
 
 ## Install (local development)
 
