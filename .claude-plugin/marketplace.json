@@ -1,5 +1,5 @@
 {
-  "name": "claude-code-plugins",
+  "name": "edusouza-plugins",
   "owner": {
     "name": "Eduardo Souza"
   },
@@ -8,7 +8,35 @@
       "name": "claude-memory",
       "source": "./plugins/claude-memory",
       "description": "Three-tier cross-session memory for Claude Code: per-session captures consolidate weekly into durable abstractions, auto-injected at session start. Per-project, opt-in, local-only.",
-      "version": "0.2.0",
+      "version": "0.3.0",
+      "author": { "name": "Eduardo Souza" }
+    },
+    {
+      "name": "delivery-workflow",
+      "source": "./plugins/delivery-workflow",
+      "description": "Feature delivery suite for GitHub: a TDD dev-workflow (with a coverage Stop-gate hook), epic orchestration across an issue hierarchy, PR review-comment resolution, and autonomous CI autoheal.",
+      "version": "0.1.0",
+      "author": { "name": "Eduardo Souza" }
+    },
+    {
+      "name": "issue-ops",
+      "source": "./plugins/issue-ops",
+      "description": "Turn inputs into structured GitHub issues: bug-rca enriches a bug issue with code + observability root-cause analysis (diagnosis only); spec-to-issues converts a spec/PRD folder into an Epic→Spec→Task hierarchy.",
+      "version": "0.1.0",
+      "author": { "name": "Eduardo Souza" }
+    },
+    {
+      "name": "context-docs",
+      "source": "./plugins/context-docs",
+      "description": "Generate a modular set of context-engineering docs under docs/context/ that AI agents lazy-load on demand — architecture, standards, patterns, decisions — for any software project.",
+      "version": "0.1.0",
+      "author": { "name": "Eduardo Souza" }
+    },
+    {
+      "name": "design-to-ui",
+      "source": "./plugins/design-to-ui",
+      "description": "Turn a design into UI components using atomic design. Source-agnostic (Stitch, Claude Design handoff/HTML, or an image) and framework-agnostic (React, Vue, Svelte, Angular, Solid).",
+      "version": "0.1.0",
       "author": { "name": "Eduardo Souza" }
     }
   ]

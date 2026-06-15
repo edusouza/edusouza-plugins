@@ -10,6 +10,7 @@
 # leaves no partial file. The actual GUARANTEE is the SessionStart catch-up sweep
 # (memory-catchup.sh), which re-captures anything this hook missed from on-disk data.
 #
+# Opt-in: only captures for projects already enabled via `/claude-memory:init`.
 # Makes ZERO `claude -p` calls. Always exits 0 so it can't block session end.
 set -uo pipefail
 
