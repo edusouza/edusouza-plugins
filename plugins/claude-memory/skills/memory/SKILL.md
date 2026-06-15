@@ -68,10 +68,11 @@ gotcha** that future sessions should know, don't wait for the weekly consolidati
 
 ## Mode 3 — End-of-session narrative ritual
 
-The SessionEnd hook captures git metadata + a raw transcript snapshot automatically, but the
-*reasoning* (decisions, dead-ends, lessons) is most cheaply captured by you, now, with full context.
-For any session with notable substance, before wrapping up write/append to
-`<memory>/episodic/sessions/<today>-narrative.md`:
+The capture hooks record git metadata + a raw transcript snapshot automatically, but the *reasoning*
+(decisions, dead-ends, lessons) is most cheaply captured by you, now, with full context. A `Stop`
+hook (`memory-narrative-nudge.sh`) prompts you to do this once per substantial session — when nudged,
+just follow it. You can also do it proactively: for any session with notable substance, before
+wrapping up write/append to `<memory>/episodic/sessions/<today>-narrative.md`:
 
 ```
 # Narrative - <today>

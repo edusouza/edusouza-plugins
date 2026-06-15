@@ -7,6 +7,21 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/memory-inject.sh",
             "statusMessage": "Recalling memory"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/memory-catchup.sh",
+            "statusMessage": "Catching up session captures"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/memory-narrative-nudge.sh"
           }
         ]
       }
