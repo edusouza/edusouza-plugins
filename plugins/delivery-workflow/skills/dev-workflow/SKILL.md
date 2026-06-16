@@ -18,7 +18,7 @@ Always ask if requirements are ambiguous before starting.
 
 **MUST complete all steps in order. Check off each step's VERIFICATION CHECKPOINT before proceeding.**
 
-- [ ] **Step 0: Branch from Issue** (if applicable) — Branch created from GitHub issue
+- [ ] **Step 0: Branch from Issue** (if applicable) — Branch created and checked out from the GitHub issue (before any coding)
 - [ ] **Step 1: Analyze** — Requirements understood, alternatives considered, parallelization assessed
 - [ ] **Step 2: Write Tests First (TDD)** — Tests written, tests fail (red phase)
 - [ ] **Step 3: Implement** — Implementation complete, tests pass (or worktrees merged)
@@ -31,16 +31,27 @@ Always ask if requirements are ambiguous before starting.
 
 ## Step 0: Branch from Issue (if applicable)
 
-**ACTION REQUIRED:** If the user provides a GitHub issue number, execute:
+**ACTION REQUIRED:** If the user provides a GitHub issue number, create and check out the linked branch **BEFORE** any analysis or coding by running the bundled script. Do NOT start Step 1 until you are on the new branch.
 
 ```bash
-gh issue develop <issue-number>
+bash "${CLAUDE_PLUGIN_ROOT}/skills/dev-workflow/scripts/branch-from-issue.sh" <issue-number>
 ```
 
-**VERIFICATION CHECKPOINT:** After executing, confirm:
-- [ ] Branch created from GitHub issue
-- [ ] Current branch is the new feature branch (not main/master)
-- [ ] Branch is linked to the GitHub issue
+On Windows without bash, use the PowerShell mirror:
+
+```powershell
+& "$env:CLAUDE_PLUGIN_ROOT/skills/dev-workflow/scripts/branch-from-issue.ps1" <issue-number>
+```
+
+The script resolves the repo's default branch, derives a branch name (`<issue-number>-<slug-of-title>`), then runs `gh issue develop <issue-number> --base <main-branch> --name <branch-name> --checkout`. It prints the created branch name and **exits non-zero with a clear message on any failure** — if it fails, STOP and surface the error; never start coding on `main`/`master`. Override the base or name when needed: `--base <branch>` / `--name <branch>` (bash) or `-Base` / `-Name` (PowerShell).
+
+> If `CLAUDE_PLUGIN_ROOT` is not set in your shell, run the script by its absolute path under this skill's `scripts/` directory.
+
+**VERIFICATION CHECKPOINT:** After the script exits 0, confirm:
+- [ ] The script printed the created branch name and exited successfully
+- [ ] Branch is checked out locally — `git rev-parse --abbrev-ref HEAD` equals the new branch
+- [ ] Current branch is NOT main/master
+- [ ] This happened BEFORE any analysis or code was written
 
 **If no issue number provided:** Skip to Step 1 (ensure you're on a feature branch, not main/master).
 
@@ -254,12 +265,13 @@ Example flow:
 ## Non-Negotiable Rules
 
 1. **Ask when unclear** — Never assume requirements
-2. **Tests first, always** — Write tests before implementation
-3. **Never modify tests to pass** — Unless business requirements changed AND user confirms
-4. **Never fake implementation** — No hardcoded returns, no skipped assertions
-5. **Code review is read-only** — No changes during Step 5 or Step 7
-6. **Security review is read-only** — No changes during Step 7
-7. **Use exact commands** — Read from package.json, never guess
-8. **Complete checkpoints** — Every step must pass its verification before proceeding
-9. **Subagents use worktrees** — Never let parallel agents write to the same working tree
-10. **Merge all worktrees** — All worktree branches must merge before Step 4
+2. **Branch from the issue first** — When a GitHub issue number is provided, create and check out the branch via `gh issue develop` BEFORE writing any code or tests
+3. **Tests first, always** — Write tests before implementation
+4. **Never modify tests to pass** — Unless business requirements changed AND user confirms
+5. **Never fake implementation** — No hardcoded returns, no skipped assertions
+6. **Code review is read-only** — No changes during Step 5 or Step 7
+7. **Security review is read-only** — No changes during Step 7
+8. **Use exact commands** — Read from package.json, never guess
+9. **Complete checkpoints** — Every step must pass its verification before proceeding
+10. **Subagents use worktrees** — Never let parallel agents write to the same working tree
+11. **Merge all worktrees** — All worktree branches must merge before Step 4
