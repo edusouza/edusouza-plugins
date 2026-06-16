@@ -31,48 +31,25 @@ Always ask if requirements are ambiguous before starting.
 
 ## Step 0: Branch from Issue (if applicable)
 
-**ACTION REQUIRED:** If the user provides a GitHub issue number, create and check out the linked branch **BEFORE** any analysis or coding. Do NOT start Step 1 until you are on the new branch.
-
-First, resolve the default branch (`<main-branch>`) and derive a deterministic branch name (`<branch-name>`) from the issue title:
+**ACTION REQUIRED:** If the user provides a GitHub issue number, create and check out the linked branch **BEFORE** any analysis or coding by running the bundled script. Do NOT start Step 1 until you are on the new branch.
 
 ```bash
-# Preconditions: gh installed + authenticated
-command -v gh >/dev/null 2>&1 || { echo 'gh CLI not installed'; exit 1; }
-gh auth status >/dev/null 2>&1 || { echo 'Run: gh auth login'; exit 1; }
-
-ISSUE_NUMBER=<issue-number>
-
-# Resolve <main-branch>: query GitHub, then fall back to local origin/HEAD
-MAIN="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null \
-  || git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
-[ -z "$MAIN" ] && { git remote set-head origin --auto >/dev/null 2>&1; \
-  MAIN="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"; }
-[ -n "$MAIN" ] || { echo 'Could not resolve default branch'; exit 1; }
-
-# Guard: <main-branch> must be a real remote branch (gh may silently fall back otherwise)
-git show-ref --verify --quiet "refs/remotes/origin/$MAIN" \
-  || git ls-remote --exit-code --heads origin "$MAIN" >/dev/null 2>&1 \
-  || { echo "Default branch '$MAIN' not found on origin"; exit 1; }
-
-# Derive <branch-name> as "<issue-number>-<kebab-slug-of-title>"
-TITLE="$(gh issue view "$ISSUE_NUMBER" --json title -q .title)"
-SLUG="$(printf '%s' "$TITLE" | tr '[:upper:]' '[:lower:]' \
-  | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-50 | sed -E 's/-+$//')"
-BRANCH="${ISSUE_NUMBER}-${SLUG:-issue}"
+bash "${CLAUDE_PLUGIN_ROOT}/skills/dev-workflow/scripts/branch-from-issue.sh" <issue-number>
 ```
 
-Then create the issue-linked branch, based on the default branch, and check it out locally with the explicit flags:
+On Windows without bash, use the PowerShell mirror:
 
-```bash
-gh issue develop "$ISSUE_NUMBER" --base "$MAIN" --name "$BRANCH" --checkout
+```powershell
+& "$env:CLAUDE_PLUGIN_ROOT/skills/dev-workflow/scripts/branch-from-issue.ps1" <issue-number>
 ```
 
-This is equivalent to: `gh issue develop <issue-number> --base <main-branch> --name <branch-name> --checkout`.
+The script resolves the repo's default branch, derives a branch name (`<issue-number>-<slug-of-title>`), then runs `gh issue develop <issue-number> --base <main-branch> --name <branch-name> --checkout`. It prints the created branch name and **exits non-zero with a clear message on any failure** — if it fails, STOP and surface the error; never start coding on `main`/`master`. Override the base or name when needed: `--base <branch>` / `--name <branch>` (bash) or `-Base` / `-Name` (PowerShell).
 
-**VERIFICATION CHECKPOINT:** After executing, confirm:
-- [ ] Branch created with the chosen name (`$BRANCH`), linked to the GitHub issue
-- [ ] Branch is based on the default branch (`$MAIN`)
-- [ ] Branch is checked out locally — `git rev-parse --abbrev-ref HEAD` equals `$BRANCH`
+> If `CLAUDE_PLUGIN_ROOT` is not set in your shell, run the script by its absolute path under this skill's `scripts/` directory.
+
+**VERIFICATION CHECKPOINT:** After the script exits 0, confirm:
+- [ ] The script printed the created branch name and exited successfully
+- [ ] Branch is checked out locally — `git rev-parse --abbrev-ref HEAD` equals the new branch
 - [ ] Current branch is NOT main/master
 - [ ] This happened BEFORE any analysis or code was written
 
