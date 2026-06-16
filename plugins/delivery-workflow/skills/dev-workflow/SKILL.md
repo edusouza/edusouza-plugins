@@ -18,7 +18,7 @@ Always ask if requirements are ambiguous before starting.
 
 **MUST complete all steps in order. Check off each step's VERIFICATION CHECKPOINT before proceeding.**
 
-- [ ] **Step 0: Branch from Issue** (if applicable) — Branch created from GitHub issue
+- [ ] **Step 0: Branch from Issue** (if applicable) — Branch created and checked out from the GitHub issue (before any coding)
 - [ ] **Step 1: Analyze** — Requirements understood, alternatives considered, parallelization assessed
 - [ ] **Step 2: Write Tests First (TDD)** — Tests written, tests fail (red phase)
 - [ ] **Step 3: Implement** — Implementation complete, tests pass (or worktrees merged)
@@ -31,16 +31,50 @@ Always ask if requirements are ambiguous before starting.
 
 ## Step 0: Branch from Issue (if applicable)
 
-**ACTION REQUIRED:** If the user provides a GitHub issue number, execute:
+**ACTION REQUIRED:** If the user provides a GitHub issue number, create and check out the linked branch **BEFORE** any analysis or coding. Do NOT start Step 1 until you are on the new branch.
+
+First, resolve the default branch (`<main-branch>`) and derive a deterministic branch name (`<branch-name>`) from the issue title:
 
 ```bash
-gh issue develop <issue-number>
+# Preconditions: gh installed + authenticated
+command -v gh >/dev/null 2>&1 || { echo 'gh CLI not installed'; exit 1; }
+gh auth status >/dev/null 2>&1 || { echo 'Run: gh auth login'; exit 1; }
+
+ISSUE_NUMBER=<issue-number>
+
+# Resolve <main-branch>: query GitHub, then fall back to local origin/HEAD
+MAIN="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null \
+  || git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
+[ -z "$MAIN" ] && { git remote set-head origin --auto >/dev/null 2>&1; \
+  MAIN="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"; }
+[ -n "$MAIN" ] || { echo 'Could not resolve default branch'; exit 1; }
+
+# Guard: <main-branch> must be a real remote branch (gh may silently fall back otherwise)
+git show-ref --verify --quiet "refs/remotes/origin/$MAIN" \
+  || git ls-remote --exit-code --heads origin "$MAIN" >/dev/null 2>&1 \
+  || { echo "Default branch '$MAIN' not found on origin"; exit 1; }
+
+# Derive <branch-name> as "<issue-number>-<kebab-slug-of-title>"
+TITLE="$(gh issue view "$ISSUE_NUMBER" --json title -q .title)"
+SLUG="$(printf '%s' "$TITLE" | tr '[:upper:]' '[:lower:]' \
+  | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-50 | sed -E 's/-+$//')"
+BRANCH="${ISSUE_NUMBER}-${SLUG:-issue}"
 ```
 
+Then create the issue-linked branch, based on the default branch, and check it out locally with the explicit flags:
+
+```bash
+gh issue develop "$ISSUE_NUMBER" --base "$MAIN" --name "$BRANCH" --checkout
+```
+
+This is equivalent to: `gh issue develop <issue-number> --base <main-branch> --name <branch-name> --checkout`.
+
 **VERIFICATION CHECKPOINT:** After executing, confirm:
-- [ ] Branch created from GitHub issue
-- [ ] Current branch is the new feature branch (not main/master)
-- [ ] Branch is linked to the GitHub issue
+- [ ] Branch created with the chosen name (`$BRANCH`), linked to the GitHub issue
+- [ ] Branch is based on the default branch (`$MAIN`)
+- [ ] Branch is checked out locally — `git rev-parse --abbrev-ref HEAD` equals `$BRANCH`
+- [ ] Current branch is NOT main/master
+- [ ] This happened BEFORE any analysis or code was written
 
 **If no issue number provided:** Skip to Step 1 (ensure you're on a feature branch, not main/master).
 
@@ -254,12 +288,13 @@ Example flow:
 ## Non-Negotiable Rules
 
 1. **Ask when unclear** — Never assume requirements
-2. **Tests first, always** — Write tests before implementation
-3. **Never modify tests to pass** — Unless business requirements changed AND user confirms
-4. **Never fake implementation** — No hardcoded returns, no skipped assertions
-5. **Code review is read-only** — No changes during Step 5 or Step 7
-6. **Security review is read-only** — No changes during Step 7
-7. **Use exact commands** — Read from package.json, never guess
-8. **Complete checkpoints** — Every step must pass its verification before proceeding
-9. **Subagents use worktrees** — Never let parallel agents write to the same working tree
-10. **Merge all worktrees** — All worktree branches must merge before Step 4
+2. **Branch from the issue first** — When a GitHub issue number is provided, create and check out the branch via `gh issue develop` BEFORE writing any code or tests
+3. **Tests first, always** — Write tests before implementation
+4. **Never modify tests to pass** — Unless business requirements changed AND user confirms
+5. **Never fake implementation** — No hardcoded returns, no skipped assertions
+6. **Code review is read-only** — No changes during Step 5 or Step 7
+7. **Security review is read-only** — No changes during Step 7
+8. **Use exact commands** — Read from package.json, never guess
+9. **Complete checkpoints** — Every step must pass its verification before proceeding
+10. **Subagents use worktrees** — Never let parallel agents write to the same working tree
+11. **Merge all worktrees** — All worktree branches must merge before Step 4
