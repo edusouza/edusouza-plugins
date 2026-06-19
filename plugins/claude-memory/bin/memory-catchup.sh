@@ -28,6 +28,8 @@ DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin}"
 [[ -z "$DIR" || ! -f "$DIR/_memory-capture-one.sh" ]] && DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="$DIR/_memory-capture-one.sh"
 [[ -f "$CORE" ]] || exit 0
+# shellcheck source=_memory-paths.sh
+. "$DIR/_memory-paths.sh"
 
 PY="$(command -v python 2>/dev/null || command -v python3 2>/dev/null || true)"
 [[ -z "$PY" ]] && exit 0
@@ -45,8 +47,11 @@ CWD_RAW=""; CUR_SID=""
 { IFS= read -r CWD_RAW; IFS= read -r CUR_SID; } <<< "$PARSED" || true
 [[ -z "$CWD_RAW" ]] && exit 0
 
-HASH="$(printf '%s' "$CWD_RAW" | sed 's#[:\\/]#-#g')"
-PROJ_DIR="$HOME/.claude/projects/$HASH"
+# Transcripts are written by Claude Code into the cwd's own project dir (raw hash), but the
+# memory dir is worktree-aware (the main repo for a linked worktree). Keep the two separate:
+# sweep transcripts from TXDIR, but check/write captures under the (possibly main) MEM.
+TXDIR="$(mem_hash_dir "$CWD_RAW")"
+PROJ_DIR="$(mem_project_dir "$CWD_RAW")"
 MEM="$PROJ_DIR/memory"
 [[ -d "$MEM" ]] || exit 0   # project not memory-enabled -> nothing to sweep
 
@@ -78,7 +83,7 @@ NOW="$(date +%s 2>/dev/null || echo 0)"
     [[ "$captured" -eq 1 ]] && continue
     CAP_CWD="$CWD_RAW" CAP_SID="$sid" CAP_TRANSCRIPT="$t" CAP_NO_GIT=1 bash "$CORE"
     count=$((count + 1))
-  done < <(ls -t "$PROJ_DIR"/*.jsonl 2>/dev/null)
+  done < <(ls -t "$TXDIR"/*.jsonl 2>/dev/null)
 } >/dev/null 2>&1
 
 exit 0

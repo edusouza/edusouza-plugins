@@ -28,6 +28,10 @@ if [[ ! -f "$PROMPTS/tier2-rollup.md" || ! -f "$PROMPTS/tier3-distill.md" ]]; th
   echo "memory-consolidate: prompt files not found under $PROMPTS" >&2; exit 1
 fi
 
+# Shared path helpers (worktree-aware memory dir resolution).
+# shellcheck source=_memory-paths.sh
+. "$(dirname "${BASH_SOURCE[0]}")/_memory-paths.sh"
+
 TMPCWD="$(mktemp -d)"
 trap 'rm -rf "$TMPCWD"' EXIT
 run_claude() { ( cd "$TMPCWD" && "$CLAUDE_BIN" -p --settings '{}' "$@" ) 2>/dev/null; }
@@ -119,13 +123,7 @@ PY
 # memory-enabled project. Anything else is treated as an explicit memory dir.
 declare -a TARGETS=()
 if [[ $# -eq 0 || -z "${1:-}" ]]; then
-  if command -v cygpath >/dev/null 2>&1; then
-    WIN="$(cygpath -w "$PWD" 2>/dev/null || echo "$PWD")"
-  else
-    WIN="$PWD"
-  fi
-  HASH="$(printf '%s' "$WIN" | sed 's#[:\\/]#-#g')"
-  CUR="$HOME/.claude/projects/$HASH/memory"
+  CUR="$(mem_project_dir "$PWD")/memory"   # worktree-aware: maps to the main repo for a worktree
   if [[ ! -d "$CUR" ]]; then
     echo "memory-consolidate: this project is not memory-enabled. Run /claude-memory:init here first."
     echo "  (looked for: $CUR)"

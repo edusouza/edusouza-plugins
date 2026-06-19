@@ -8,16 +8,16 @@
 set -uo pipefail
 
 TARGET="${1:-$PWD}"
-# Claude Code names project dirs from the path it was launched with, replacing
-# : \ / with '-'. Convert to a Windows-style path first on Windows so the hash
-# matches (e.g. C:\Users\me\proj -> C--Users-me-proj).
-if command -v cygpath >/dev/null 2>&1; then
-  WIN="$(cygpath -w "$TARGET" 2>/dev/null || echo "$TARGET")"
-else
-  WIN="$TARGET"
-fi
-HASH="$(printf '%s' "$WIN" | sed 's#[:\\/]#-#g')"
-MEM="$HOME/.claude/projects/$HASH/memory"
+
+# Shared path helpers (worktree-aware memory dir resolution).
+DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin}"
+[[ -z "$DIR" || ! -f "$DIR/_memory-paths.sh" ]] && DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_memory-paths.sh
+. "$DIR/_memory-paths.sh"
+
+# Claude Code names project dirs from the launch path, replacing : \ / with '-'. When
+# TARGET is a linked git worktree, memory resolves to the MAIN repo so it stays shared.
+MEM="$(mem_project_dir "$TARGET")/memory"
 
 if [[ -d "$MEM" ]]; then
   echo "memory already enabled for: $TARGET"

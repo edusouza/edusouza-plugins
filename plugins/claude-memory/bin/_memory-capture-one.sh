@@ -24,26 +24,23 @@ CAP_SID="${CAP_SID:-}"
 CAP_TRANSCRIPT="${CAP_TRANSCRIPT:-}"
 CAP_NO_GIT="${CAP_NO_GIT:-}"
 
-# Normalize Windows paths (C:\... or C:/...) to POSIX (/c/...) for git-bash use.
-to_posix() {
-  [[ -z "$1" ]] && return 0
-  if command -v cygpath >/dev/null 2>&1; then
-    cygpath -u "$1" 2>/dev/null || printf '%s' "$1"
-  else
-    printf '%s' "$1" | sed -E 's#^([A-Za-z]):#/\L\1#; s#\\#/#g'
-  fi
-}
-CWD="$(to_posix "$CAP_CWD")"
-TRANSCRIPT="$(to_posix "$CAP_TRANSCRIPT")"
+# Shared path helpers (worktree-aware memory dir resolution + mem_to_posix).
+DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin}"
+[[ -z "$DIR" || ! -f "$DIR/_memory-paths.sh" ]] && DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_memory-paths.sh
+. "$DIR/_memory-paths.sh"
+
+CWD="$(mem_to_posix "$CAP_CWD")"
+TRANSCRIPT="$(mem_to_posix "$CAP_TRANSCRIPT")"
 
 # --- derive the user-local memory dir ---
-# Prefer transcript_path (authoritative: ~/.claude/projects/<hash>/<sid>.jsonl),
-# fall back to encoding cwd the same way Claude Code names project dirs.
-if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
+# Derive from cwd (worktree-aware: a linked worktree maps to the main repo's memory dir).
+# Fall back to the transcript's own project dir only when no cwd is available — the
+# transcript lives at ~/.claude/projects/<hash>/<sid>.jsonl, so its dirname is that dir.
+if [[ -n "$CAP_CWD" ]]; then
+  PROJ_DIR="$(mem_project_dir "$CAP_CWD")"
+elif [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   PROJ_DIR="$(dirname "$TRANSCRIPT")"
-elif [[ -n "$CAP_CWD" ]]; then
-  HASH="$(printf '%s' "$CAP_CWD" | sed 's#[:\\/]#-#g')"
-  PROJ_DIR="$HOME/.claude/projects/$HASH"
 else
   exit 0
 fi

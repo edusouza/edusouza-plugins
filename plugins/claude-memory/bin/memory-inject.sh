@@ -13,6 +13,12 @@ set -uo pipefail
 PYBIN="$(command -v python 2>/dev/null || command -v python3 2>/dev/null || true)"
 [[ -z "$PYBIN" ]] && exit 0
 
+# Shared path helpers (worktree-aware memory dir resolution).
+DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin}"
+[[ -z "$DIR" || ! -f "$DIR/_memory-paths.sh" ]] && DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_memory-paths.sh
+. "$DIR/_memory-paths.sh"
+
 PAYLOAD="$(cat 2>/dev/null || true)"
 
 CWD_RAW="$(printf '%s' "$PAYLOAD" | "$PYBIN" -c "import sys,json
@@ -20,11 +26,21 @@ try: print((json.loads(sys.stdin.read() or '{}').get('cwd') or ''))
 except Exception: print('')" 2>/dev/null | tr -d '\r' || true)"
 [[ -z "$CWD_RAW" ]] && exit 0
 
-HASH="$(printf '%s' "$CWD_RAW" | sed 's#[:\\/]#-#g')"
-MEMDIR="$HOME/.claude/projects/$HASH/memory"
+# Worktree-aware: a linked worktree resolves to the main repo's memory dir.
+MEMDIR="$(mem_project_dir "$CWD_RAW")/memory"
 [[ -d "$MEMDIR" ]] || exit 0   # project not memory-enabled -> nothing to inject
 
 {
+  # Tell the model the absolute memory dir to read/write (Modes 1-3) — esp. important in a
+  # worktree, where deriving it from cwd would point at the wrong (worktree) location.
+  MEMDIR_DISPLAY="$MEMDIR"
+  if command -v cygpath >/dev/null 2>&1; then
+    MEMDIR_DISPLAY="$(cygpath -m "$MEMDIR" 2>/dev/null || echo "$MEMDIR")"
+  fi
+  echo ""
+  echo "## Memory - dir for this project"
+  echo "$MEMDIR_DISPLAY"
+
   SDIR="$MEMDIR/episodic/sessions"
   if compgen -G "$SDIR/*.md" >/dev/null 2>&1; then
     echo ""
