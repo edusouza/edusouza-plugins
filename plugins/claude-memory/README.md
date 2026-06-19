@@ -41,7 +41,8 @@ put on `PATH`. The two lifecycle hooks remain shell scripts because the harness 
 automatically on session start/end.
 
 Memory is **per-project**, **opt-in**, and **local-only** (lives under `~/.claude/projects/<hash>/memory/`,
-never committed to a repo).
+never committed to a repo). Sessions run from a **git worktree** resolve to the **main repo's** memory
+dir, so a project's memory stays unified across all its worktrees instead of fragmenting per-worktree.
 
 ## Why capture runs on *two* hooks
 

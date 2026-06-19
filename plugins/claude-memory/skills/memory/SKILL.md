@@ -21,8 +21,12 @@ decays into semantic abstractions (concepts) over time.
   episodic/weekly/<YYYY>-Www.md          # Tier 2: weekly rollups
 ```
 
-`<project-hash>` is the project path with `:` `\` `/` replaced by `-`. Derive it from the current
-working directory, then use `~/.claude/projects/<hash>/memory`.
+`<project-hash>` is the project path with `:` `\` `/` replaced by `-`. The session-start memory
+context reports the absolute memory dir to use (a `## Memory - dir for this project` line) — prefer
+that path for all reads/writes. If you must derive it yourself, hash the current working directory;
+**but inside a git worktree the hash resolves to the main repo root**, so worktree sessions share the
+main repo's memory rather than creating a separate per-worktree dir. Use the reported path to avoid
+getting this wrong.
 
 ## Enabling a project (opt-in)
 
