@@ -53,6 +53,9 @@ Load these ONLY when relevant to your task:
 - `examples.md` — how-to guides for common modifications
 - `troubleshooting.md` — build/test issues, known gotchas
 - `tooling.md` — required tools, versions, env vars
+- `data-models.md` — schema, entities, relations (if applicable)
+- `api.md` — endpoint catalog, contracts (if applicable)
+- `dependencies.md` — key libs, what NOT to use
 ```
 
 ---
@@ -232,6 +235,12 @@ E.g., "No fakeAsync with Vitest", "Don't mock the database in integration tests"
 | Add a new API service | {types, service extending base} |
 | Add environment config | {environment files, types} |
 | Add a test | {co-located .spec.ts} |
+
+## Common Mistakes
+{What agents typically get wrong in this specific project:
+- Patterns that look right but break project conventions
+- Imports that seem obvious but conflict with aliases
+- Auth/state assumptions that are wrong for this stack}
 ```
 
 ---
@@ -280,4 +289,125 @@ E.g., "No fakeAsync with Vitest", "Don't mock the database in integration tests"
 | Variable | Required | Description | Where Set |
 |----------|----------|-------------|-----------|
 | {e.g., API_BASE_URL} | {dev/prod/both} | Backend API URL | {.env, CI secrets} |
+```
+
+---
+
+## data-models.md (60-150 lines)
+
+```markdown
+# Data Models
+
+## Overview
+{Database engine, ORM, migration tool. Total number of main entities.}
+
+## Entities
+
+### {EntityName}
+| Field | Type | Nullable | Notes |
+|-------|------|----------|-------|
+| id | {uuid/int} | no | Primary key |
+| {field} | {type} | {yes/no} | {constraints, default, FK target} |
+| created_at | timestamp | no | Auto-set on insert |
+
+{Repeat for each main entity. Skip junction tables unless they have extra fields.}
+
+## Relations
+\```
+{Diagram or list of key relations:}
+User -> Post (one-to-many, User.id = Post.author_id)
+Post <-> Tag (many-to-many via post_tags)
+Order -> OrderItem (one-to-many, cascade delete)
+\```
+
+## Naming Conventions
+{snake_case vs camelCase in DB. Table naming (plural/singular). FK naming pattern.
+How ORM maps names (e.g., Prisma camelCase fields → snake_case columns).}
+
+## Migrations
+{Where migrations live. How to create and run them. Current state/version.}
+\```bash
+{migration run command}
+{migration create command}
+\```
+```
+
+---
+
+## api.md (60-150 lines)
+
+```markdown
+# API
+
+## Overview
+{REST/GraphQL/gRPC. Base URL pattern (e.g., `/api/v1`). Versioning strategy. Auth mechanism.}
+
+## Authentication
+{How to authenticate requests — bearer token, session cookie, API key, OAuth flow.
+Which routes are public vs protected.}
+
+## Endpoints
+
+### {Resource} (`/api/{resource}`)
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/{resource}` | {required/public} | List all {resource} |
+| GET | `/api/{resource}/:id` | {required/public} | Get single {resource} |
+| POST | `/api/{resource}` | required | Create {resource} |
+| PUT | `/api/{resource}/:id` | required | Update {resource} |
+| DELETE | `/api/{resource}/:id` | required | Delete {resource} |
+
+**Request body (POST/PUT):**
+\```json
+{example request body with real field names}
+\```
+
+**Response shape:**
+\```json
+{example response body}
+\```
+
+{Repeat per resource group.}
+
+## Error Format
+\```json
+{standard error response — status, code, message fields}
+\```
+
+## Pagination
+{Cursor-based / offset-limit / page. Request params and response envelope fields.}
+```
+
+---
+
+## dependencies.md (60-150 lines)
+
+```markdown
+# Dependencies
+
+## Key Libraries
+| Library | Version | Purpose | Why chosen |
+|---------|---------|---------|------------|
+| {lib} | {x.y.z} | {what it does} | {why this one — vs alternatives not chosen} |
+
+{Focus on non-obvious choices. Skip ubiquitous tools already in tooling.md (Node, pnpm, etc.).}
+
+## Usage Patterns
+
+### {Library Name}
+\```{language}
+// How this library is actually used in the project
+{short annotated example from real code — import path + typical call}
+\```
+
+{Include patterns for: HTTP client, state management, auth, ORM, UI component lib.}
+
+## What NOT to Use
+| Instead of | Use | Reason |
+|-----------|-----|--------|
+| {lib to avoid} | {preferred lib already in project} | {why — duplicate, deprecated, policy} |
+
+## Version Constraints
+{Libraries pinned to specific versions and why — known breaking changes, peer dep conflicts.
+Any libraries that MUST NOT be upgraded without a migration plan.}
 ```

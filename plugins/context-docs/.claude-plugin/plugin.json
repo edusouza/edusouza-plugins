@@ -1,7 +1,7 @@
 {
   "name": "context-docs",
   "description": "Generate a modular set of context-engineering docs under docs/context/ that AI agents lazy-load on demand. Analyzes config, source, tests, CI/CD, and git history to capture architecture, standards, patterns, and decisions for any software project.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": { "name": "Eduardo Souza" },
   "license": "MIT"
 }
