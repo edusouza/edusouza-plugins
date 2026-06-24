@@ -48,18 +48,29 @@ gh issue develop <issue-number>
 
 ## Step 1: Analyze
 
-**ACTION REQUIRED:** Complete ALL of the following before proceeding:
+**ACTION REQUIRED:** Dispatch an **Explore subagent** first, then synthesize findings.
 
-- For **features/improvements**: State the expected behavior. List affected files.
-- For **bug fixes**: List 2-3 root cause hypotheses. Identify the most likely cause.
+### 1a — Launch Explore agent
+
+Dispatch an `Explore` subagent (subagent_type) with a prompt that includes the task description and asks it to:
+- Find all files likely affected (source, tests, types, config)
+- Trace the call graph / dependency chain from the entry point
+- For bug fixes: locate where the symptom surfaces and list candidate root-cause sites
+- Report the dependency graph and flag any shared state between potential work units
+
+### 1b — Synthesize (after Explore returns)
+
+Using the Explore findings, complete ALL of the following:
+
+- For **features/improvements**: State the expected behavior. Confirm affected files from Explore output.
+- For **bug fixes**: State the most likely root cause (from the candidate sites Explore identified). List 2-3 hypotheses ranked by likelihood.
 - For **all tasks**: List 2-3 alternative approaches with trade-offs. Select one and explain why.
-- **Parallelization assessment**: Identify which parts are independent and can be worked on concurrently in isolated worktrees. Record the dependency graph.
+- **Parallelization assessment**: Using the dependency graph from Explore, identify which work units are independent (no shared file writes). Record the dependency graph.
 
 **VERIFICATION CHECKPOINT:** Before proceeding to Step 2, confirm:
+- [ ] Explore agent returned affected files and dependency graph
 - [ ] Expected behavior (for features) OR root cause (for bugs) is clearly stated
-- [ ] Affected files are listed
-- [ ] Alternative approaches were considered
-- [ ] Selected approach is justified
+- [ ] Alternative approaches were considered and one selected
 - [ ] Parallelization assessment completed (independent units identified or none)
 
 **If requirements are unclear:** STOP and ask the user. DO NOT proceed.
@@ -176,20 +187,23 @@ If merge conflicts occur: resolve manually, favoring correctness.
 
 ## Step 5: Code Review
 
-**ACTION REQUIRED:** Review code WITHOUT making changes:
+**ACTION REQUIRED:** Launch all three review agents in a **single message** for maximum concurrency. Get the git diff first, then pass it to each agent.
 
-Check the following:
-- [ ] Architecture compliance
-- [ ] Naming conventions followed
-- [ ] Single Responsibility Principle (SRP) respected
-- [ ] Component structure follows atomic design
-- [ ] Style guidelines met
-- [ ] Code is clear and maintainable
-- [ ] No unnecessary complexity
-- [ ] If parallel used: consistency across merged work units
+1. **Agent 1** — `pr-review-toolkit:code-reviewer` (subagent_type)
+   - Prompt includes: the git diff of changed files + "Review for architecture compliance, naming conventions, SRP, atomic component structure, style guidelines, clarity, and maintainability. If parallel worktrees were merged, also check consistency across work units. Return findings with file:line references."
 
-**VERIFICATION CHECKPOINT:** After review, output:
-- If violations found: List each with file:line reference → PROCEED TO STEP 6
+2. **Agent 2** — `pr-review-toolkit:silent-failure-hunter` (subagent_type)
+   - Prompt includes: the git diff of changed files + "Find silent failures, swallowed errors, inadequate error handling, and inappropriate fallback behavior. Return findings with file:line references."
+
+3. **Agent 3** — `pr-review-toolkit:type-design-analyzer` (subagent_type)
+   - Prompt includes: the git diff of changed files + "Review new or modified types for encapsulation quality, invariant expression, and usefulness. Return findings with file:line references."
+
+**VERIFICATION CHECKPOINT:** After all three agents complete, confirm:
+- [ ] All three agents finished
+- [ ] Findings collected and merged from all agents
+
+**After collecting findings:**
+- If any violations found: List each with file:line reference → PROCEED TO STEP 6
 - If no violations: → PROCEED TO STEP 7
 
 **DO NOT modify code in this step.**
@@ -217,18 +231,13 @@ Check the following:
 
 ## Step 7: Security Review
 
-**ACTION REQUIRED:** Review code WITHOUT making changes:
+**ACTION REQUIRED:** Launch a dedicated security review agent. Get the git diff first, then dispatch:
 
-Check the following:
-- [ ] Input validation present
-- [ ] No injection risks (SQL, XSS, command injection)
-- [ ] Authentication/authorization properly used
-- [ ] No secrets exposed
-- [ ] No insecure defaults
-- [ ] OWASP Top 10 relevant items covered
+- **Agent** — `pr-review-toolkit:code-reviewer` (subagent_type)
+  - Prompt includes: the git diff of changed files + "Perform a security-only review. Check: input validation, injection risks (SQL, XSS, command injection), authentication/authorization usage, exposed secrets or credentials, insecure defaults, and OWASP Top 10 items relevant to this diff. Do NOT flag style or architecture issues — security only. Return findings with file:line references and severity (critical/high/medium/low)."
 
-**VERIFICATION CHECKPOINT:** After review, output:
-- If issues found: List each with file:line reference → RETURN TO STEP 3
+**VERIFICATION CHECKPOINT:** After the agent completes, output:
+- If issues found: List each with file:line reference and severity → RETURN TO STEP 3
 - If no issues: → TASK COMPLETE
 
 **DO NOT modify code in this step.**
