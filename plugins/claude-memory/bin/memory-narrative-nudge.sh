@@ -22,6 +22,12 @@ set -uo pipefail
 PY="$(command -v python 2>/dev/null || command -v python3 2>/dev/null || true)"
 [[ -z "$PY" ]] && exit 0
 
+# Shared path helpers (worktree-aware memory dir resolution).
+DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin}"
+[[ -z "$DIR" || ! -f "$DIR/_memory-paths.sh" ]] && DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_memory-paths.sh
+. "$DIR/_memory-paths.sh"
+
 PAYLOAD="$(cat 2>/dev/null || true)"
 
 # Parse scalar fields + count assistant turns in one python pass.
@@ -57,8 +63,8 @@ CWD_RAW=""; SID=""; TRANSCRIPT_RAW=""; STOP_ACTIVE="0"; TURNS="0"
 [[ "$STOP_ACTIVE" == "1" ]] && exit 0
 [[ -z "$CWD_RAW" ]] && exit 0
 
-HASH="$(printf '%s' "$CWD_RAW" | sed 's#[:\\/]#-#g')"
-MEM="$HOME/.claude/projects/$HASH/memory"
+# Worktree-aware: a linked worktree resolves to the main repo's memory dir.
+MEM="$(mem_project_dir "$CWD_RAW")/memory"
 [[ -d "$MEM" ]] || exit 0   # project not memory-enabled
 
 SID8="${SID:0:8}"; [[ -z "$SID8" ]] && SID8="nosid"

@@ -28,6 +28,10 @@ repo has a `test:cov` script, it runs coverage and blocks stopping until it pass
 
 ## Dependencies
 - **Required:** `git`, the GitHub CLI (`gh`, authenticated).
+- **Step 0 branch helper:** `dev-workflow` branches from an issue via a bundled script —
+  `skills/dev-workflow/scripts/branch-from-issue.sh` (bash), with a `branch-from-issue.ps1`
+  mirror for native Windows. It resolves the default branch, derives the branch name from the
+  issue title, and runs `gh issue develop … --checkout`.
 - **Optional (graceful):** `epic-workflow` calls `/delivery-workflow:dev-workflow` (bundled) and references
   the external `commit-commands` and `code-review` plugins. If those aren't installed, Claude performs the
   commit/PR and review steps inline.

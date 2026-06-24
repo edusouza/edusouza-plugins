@@ -15,7 +15,7 @@
       "name": "delivery-workflow",
       "source": "./plugins/delivery-workflow",
       "description": "Feature delivery suite for GitHub: a TDD dev-workflow (with a coverage Stop-gate hook), epic orchestration across an issue hierarchy, PR review-comment resolution, and autonomous CI autoheal.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": { "name": "Eduardo Souza" }
     },
     {
