@@ -1,4 +1,4 @@
-# claude-plugins
+# edusouza-plugins
 
 A personal [Claude Code](https://code.claude.com) plugin marketplace.
 
