@@ -28,17 +28,51 @@ CHANGED=$(gh pr view $PR --json files --jq '[.files[].path] | join(" ")')
 # If both repos changed, run both verify commands in their respective directories.
 ```
 
+## Pre-flight: Merge Conflict Check
+
+Before entering the iteration loop, query GitHub's merge status:
+
+```bash
+gh pr view $PR --json mergeable,mergeStateStatus \
+  --jq '{mergeable: .mergeable, state: .mergeStateStatus}'
+```
+
+| `mergeable`   | Action |
+|---------------|--------|
+| `MERGEABLE`   | No conflicts — proceed to Iteration Loop |
+| `UNKNOWN`     | Wait 10 s, re-poll once; if still UNKNOWN, continue to loop and recheck mid-run |
+| `CONFLICTING` | Attempt rebase (see below) |
+
+**Rebase attempt:**
+
+```bash
+git fetch origin
+git rebase origin/$BASE
+```
+
+- **Rebase succeeds (no conflict markers):** push the rebased branch and proceed to the Iteration Loop. Count this rebase as iteration 1.
+- **Rebase leaves conflict markers:** list conflicting files and escalate immediately — do not attempt to auto-resolve content conflicts.
+
+```bash
+# List files with unresolved conflicts after a failed rebase
+git diff --name-only --diff-filter=U
+git rebase --abort
+```
+
 ## Iteration Loop (max 5)
 
-Repeat until all checks pass or iteration cap is reached.
+Repeat until all checks pass and PR is mergeable, or iteration cap is reached.
 
-### 1. Poll check statuses
+### 1. Poll check statuses and mergeability
 
 ```bash
 gh pr checks $PR --json name,status,conclusion,detailsUrl
+gh pr view $PR --json mergeable --jq '.mergeable'
 ```
 
-If all conclusions are `SUCCESS` or `SKIPPED` — report success and stop.
+If all conclusions are `SUCCESS` or `SKIPPED` **and** `mergeable == MERGEABLE` — report success and stop.
+
+If `mergeable == CONFLICTING` at any point mid-loop (base branch moved after a push), run the rebase attempt from the pre-flight section and count it as the current iteration.
 
 ### 2. Collect failing logs
 
@@ -65,6 +99,8 @@ Wait for the subagent response before continuing.
 ### 4. Check for escalation conditions
 
 If subagent reports `migration required: yes` — **stop and escalate immediately**. Do not attempt a fix; migrations must be authored by the developer.
+
+If a rebase attempt left conflict markers in any file — **stop and escalate immediately**. Content conflicts must be resolved by the developer.
 
 ### 5. Apply the fix
 
@@ -109,6 +145,7 @@ Wait ~30 seconds for CI to pick up the push, then return to step 1.
 
 **Iterations attempted**: <N>
 **Checks still failing**: <list>
+**Merge conflicts**: <list of conflicting files, or "none">
 
 ### Iteration history
 | # | Root cause diagnosed | Fix applied | Local verify | Outcome |
@@ -124,6 +161,7 @@ Wait ~30 seconds for CI to pick up the push, then return to step 1.
 
 Common escalation reasons:
 - Migration required — run `pnpm migration:generate src/database/migrations/Name` and review
+- Merge conflict with `$BASE` — run `git rebase origin/$BASE`, resolve conflicts manually in the listed files, then `git rebase --continue`
 - Root cause is upstream (outside this PR's changed files)
 - Flaky test — note test name, suggest re-run or skip investigation
 - Secrets/env var missing in CI environment
@@ -137,5 +175,6 @@ Common escalation reasons:
 | No force push | Unless branch history already has one |
 | Conventional commits | `fix: <description>` |
 | No auto-migrations | Escalate instead |
+| No auto-conflict resolution | Escalate with file list; run `git rebase --abort` to clean state |
 | Iteration cap | 5 loops, then escalate |
 | Timeout | ~15 min total; skip `gh run view` if it hangs beyond 10 min |
