@@ -5,23 +5,23 @@ A personal [Claude Code](https://code.claude.com) plugin marketplace.
 ## Install
 
 ```bash
-/plugin marketplace add edusouza/claude-plugins
-/plugin install claude-memory@claude-plugins
+/plugin marketplace add edusouza/edusouza-plugins
+/plugin install claude-memory@edusouza-plugins
 ```
 
-Update later with `/plugin marketplace update claude-plugins`.
+Update later with `/plugin marketplace update edusouza-plugins`.
 
 ## Plugins
 
 | Plugin | Description |
 |--------|-------------|
-| [**claude-memory**](plugins/claude-memory) | Three-tier, brain-like cross-session memory: SessionEnd captures each session, a weekly consolidation distills durable decision-heuristics, and relevant memory is auto-injected at session start. Per-project, opt-in, local-only. |
-| [**delivery-workflow**](plugins/delivery-workflow) | Feature delivery suite for GitHub: TDD `dev-workflow` (with a coverage Stop-gate hook), `epic-workflow` orchestration, `pr-review-fix`, and `pr-autoheal`. Drives code from issue to green PR. |
+| [**claude-memory**](plugins/claude-memory) | Three-tier cross-session memory for Claude Code: per-session captures consolidate weekly into durable abstractions, auto-injected at session start. Per-project, opt-in, local-only. |
+| [**delivery-workflow**](plugins/delivery-workflow) | Feature delivery suite for GitHub: a TDD dev-workflow (with a coverage Stop-gate hook), epic orchestration across an issue hierarchy, PR review-comment resolution, PR-bound CI autoheal, and branch/main CI autoheal for deployment pipelines. Drives code from issue to green. |
 | [**issue-ops**](plugins/issue-ops) | Turn inputs into structured GitHub issues: `bug-rca` (code + observability root-cause analysis, diagnosis only) and `spec-to-issues` (spec/PRD folder → Epic→Spec→Task hierarchy). |
 | [**context-docs**](plugins/context-docs) | Generate modular context-engineering docs under `docs/context/` that AI agents lazy-load on demand — architecture, standards, patterns, decisions — for any project. |
 | [**design-to-ui**](plugins/design-to-ui) | Turn a design into UI components via atomic design. Source-agnostic (Stitch, Claude Design handoff/HTML, image) and framework-agnostic (React, Vue, Svelte, Angular, Solid). |
 
-Install any of them with `/plugin install <name>@claude-plugins` (e.g. `/plugin install delivery-workflow@claude-plugins`).
+Install any of them with `/plugin install <name>@edusouza-plugins` (e.g. `/plugin install delivery-workflow@edusouza-plugins`).
 
 ## Local development
 
