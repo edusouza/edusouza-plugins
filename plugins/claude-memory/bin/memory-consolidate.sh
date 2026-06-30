@@ -48,7 +48,10 @@ rollup_is_valid() {
   local out="$1" rc="$2"
   (( rc != 0 )) && return 1
   [[ -z "${out// }" ]] && return 1
-  printf '%s' "$out" | grep -qiE 'prompt is too long|api error|context (length|window)|rate limit|usage limit|invalid api key|overloaded|execution error' && return 1
+  # Anchor the sentinel check to the first few lines: a bare CLI/API error printed as the
+  # whole stdout shows up at the very start. Scanning the full body would falsely reject a
+  # legitimate rollup whose prose happens to mention "rate limit", "prompt is too long", etc.
+  printf '%s' "$out" | head -3 | grep -qiE 'prompt is too long|api error|context (length|window)|rate limit|usage limit|invalid api key|overloaded|execution error' && return 1
   printf '%s' "$out" | grep -q '# Week' || return 1
   return 0
 }
