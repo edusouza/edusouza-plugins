@@ -45,10 +45,20 @@ operations MUST stay inside MEMORY_DIR (you have been granted access to exactly 
    - referenced/reinforced this run or `last_accessed` within 30 days of TODAY → `status: active`.
    - `last_accessed` older than 30 days and not reinforced → set `status: dormant`.
    Dormant/superseded concepts stay on disk but are DROPPED from `MEMORY.md` (still found via search).
-5. **Rebuild `MEMORY.md`.** Overwrite it so it lists ONLY `active` Tier-3 files
-   (`concept_*`/`project_*`/`feedback_*`), one line each:
-   `- [<name>](<filename>.md) — <description>`
-   Keep the leading HTML comment block. NEVER list episodic logs (sessions/weekly) in MEMORY.md.
+5. **Update `MEMORY.md` non-destructively.** `MEMORY.md` is SHARED — other tools (e.g. the
+   user's global auto-memory) also write entries here, so you MUST preserve everything you did
+   not write. Manage ONLY your own region, delimited by these exact marker lines:
+   ```
+   <!-- BEGIN claude-memory tier-3 (managed; do not edit by hand) -->
+   - [<name>](<filename>.md) — <description>
+   <!-- END claude-memory tier-3 -->
+   ```
+   - Rewrite ONLY the lines between those markers, listing one entry per `active` Tier-3 file
+     (`concept_*`/`project_*`/`feedback_*`). Omit `dormant`/`superseded` ones (still found via search).
+   - If the markers are absent, APPEND the whole block to the end of `MEMORY.md` (and create the
+     file containing just the block if it doesn't exist). NEVER delete, reorder, or rewrite any
+     line outside your markers.
+   - NEVER list episodic logs (sessions/weekly) anywhere in `MEMORY.md`.
 
 ## Redaction
 The rollups should already be redacted, but if you notice any residual secret or personal data (an
