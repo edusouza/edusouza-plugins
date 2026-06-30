@@ -33,8 +33,28 @@ fi
 . "$(dirname "${BASH_SOURCE[0]}")/_memory-paths.sh"
 
 TMPCWD="$(mktemp -d)"
-trap 'rm -rf "$TMPCWD"' EXIT
-run_claude() { ( cd "$TMPCWD" && "$CLAUDE_BIN" -p --settings '{}' "$@" ) 2>/dev/null; }
+CLAUDE_ERR="$(mktemp)"
+trap 'rm -rf "$TMPCWD" "$CLAUDE_ERR"' EXIT
+# Keep stderr (the exit code and any error text) instead of black-holing it, so a failed
+# headless call is diagnosable rather than silently mistaken for a successful rollup.
+run_claude() { ( cd "$TMPCWD" && "$CLAUDE_BIN" -p --settings '{}' "$@" ) 2>"$CLAUDE_ERR"; }
+
+# A Tier-2 rollup is valid ONLY if claude exited 0, produced non-empty output, that output
+# is not a known CLI/API error string (headless `claude -p` prints "Prompt is too long" and
+# similar to stdout while still being non-empty), and it structurally looks like a rollup
+# (the tier2 prompt mandates a `# Week ...` header). Anything else is a failure — so we never
+# persist an error message as a rollup, and never archive/delete the sources on a bad run.
+rollup_is_valid() {
+  local out="$1" rc="$2"
+  (( rc != 0 )) && return 1
+  [[ -z "${out// }" ]] && return 1
+  # Anchor the sentinel check to the first few lines: a bare CLI/API error printed as the
+  # whole stdout shows up at the very start. Scanning the full body would falsely reject a
+  # legitimate rollup whose prose happens to mention "rate limit", "prompt is too long", etc.
+  printf '%s' "$out" | head -3 | grep -qiE 'prompt is too long|api error|context (length|window)|rate limit|usage limit|invalid api key|overloaded|execution error' && return 1
+  printf '%s' "$out" | grep -q '# Week' || return 1
+  return 0
+}
 
 consolidate_one() {
   local MEM_IN="$1" MEM SESS WEEKLY ARCHIVE TODAY
@@ -47,7 +67,7 @@ consolidate_one() {
 
   # -------- Tier 2: weekly rollups --------
   echo "  == Tier 2: weekly rollups =="
-  local WEEKS WK FILES INFILE ROLLUP_OUT f raw
+  local WEEKS WK FILES INFILE ROLLUP_OUT f raw rc
   mapfile -t WEEKS < <("$PY" - "$SESS" <<'PY' | tr -d '\r'
 import sys,os,glob,datetime,re
 sess=sys.argv[1]; weeks=set()
@@ -79,21 +99,48 @@ PY
       {
         cat "$PROMPTS/tier2-rollup.md"; echo; echo "================ INPUT MATERIAL FOR $WK ================"
         for f in "${FILES[@]}"; do echo; echo "===== SESSION NOTE: $(basename "$f") ====="; cat "$f"; done
+        # Raw transcripts can be enormous (often >1 MB each); dumping them whole is what
+        # overflowed the model context and produced "Prompt is too long" rollups. Bound them:
+        # the session notes above are the primary signal and are always included in full; raw
+        # is supplementary, capped per-file (head+tail) and by a total per-week byte budget.
+        local RAW_BUDGET=120000 PF_HEAD=20000 PF_TAIL=10000 used=0 sz
         for f in "${FILES[@]}"; do
           raw="$SESS/raw/$(basename "$f" .md).jsonl"
-          [[ -f "$raw" ]] && { echo; echo "===== RAW TRANSCRIPT: $(basename "$raw") ====="; cat "$raw"; }
+          [[ -f "$raw" ]] || continue
+          echo; echo "===== RAW TRANSCRIPT: $(basename "$raw") ====="
+          if (( used >= RAW_BUDGET )); then
+            echo "(omitted — raw transcript budget for this week exhausted)"; continue
+          fi
+          sz=$(wc -c < "$raw" | tr -d ' ')
+          if (( sz <= PF_HEAD + PF_TAIL )); then
+            cat "$raw"; used=$(( used + sz ))
+          else
+            head -c "$PF_HEAD" "$raw"
+            printf '\n...[truncated %d bytes of transcript]...\n' "$(( sz - PF_HEAD - PF_TAIL ))"
+            tail -c "$PF_TAIL" "$raw"
+            used=$(( used + PF_HEAD + PF_TAIL ))
+          fi
         done
       } > "$INFILE"
-      ROLLUP_OUT="$(run_claude --permission-mode bypassPermissions < "$INFILE")"
-      if [[ -n "${ROLLUP_OUT// }" ]]; then
+      ROLLUP_OUT="$(run_claude --permission-mode bypassPermissions < "$INFILE")"; rc=$?
+      if rollup_is_valid "$ROLLUP_OUT" "$rc"; then
+        # Self-heal: drop a previously-corrupt rollup (e.g. an old "Prompt is too long" file
+        # written before this guard existed) so we regenerate clean instead of appending a
+        # good rollup beneath a junk header.
+        if [[ -f "$WEEKLY/$WK.md" ]] && ! grep -q '# Week' "$WEEKLY/$WK.md" 2>/dev/null; then
+          rm -f "$WEEKLY/$WK.md"
+        fi
         [[ -f "$WEEKLY/$WK.md" ]] && printf '%s\n' "$ROLLUP_OUT" >> "$WEEKLY/$WK.md" || printf '%s\n' "$ROLLUP_OUT" > "$WEEKLY/$WK.md"
+        # Only now that a VALID rollup is on disk do we consume (archive notes / delete raw).
         for f in "${FILES[@]}"; do
           mv "$f" "$ARCHIVE/" 2>/dev/null || true
           rm -f "$SESS/raw/$(basename "$f" .md).jsonl" 2>/dev/null || true
         done
         echo "    wrote $WK.md from ${#FILES[@]} session note(s); archived + raw deleted"
       else
-        echo "    WARN: claude produced no rollup for $WK; left session notes untouched" >&2
+        echo "    WARN: invalid/failed rollup for $WK (rc=$rc) — left notes+raw intact, will retry next run" >&2
+        printf '      output head: %s\n' "$(printf '%s' "$ROLLUP_OUT" | head -c 120 | tr '\n' ' ')" >&2
+        [[ -s "$CLAUDE_ERR" ]] && echo "      claude stderr (last line): $(tail -n1 "$CLAUDE_ERR")" >&2
       fi
       rm -f "$INFILE"
     done

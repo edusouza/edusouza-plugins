@@ -2,7 +2,10 @@ You are the **Tier-2 consolidation pass** of a developer memory system.
 
 You will receive, below this instruction block, the raw material for ONE ISO week: a set of
 per-session capture notes (git metadata + any human/agent narrative) and the raw session
-transcripts they reference. Your job is to compress that week into ONE durable narrative rollup.
+transcripts they reference. The capture notes are the primary signal and are complete; the raw
+transcripts are supplementary and may be **truncated or omitted** to fit a size budget (you may
+see "[truncated N bytes]" / "budget exhausted" markers — that is expected, not an error). Work
+from whatever is present. Your job is to compress that week into ONE durable narrative rollup.
 
 ## Output contract
 - Output **only** the rollup as GitHub-flavored Markdown to stdout. No preamble, no "Here is...",

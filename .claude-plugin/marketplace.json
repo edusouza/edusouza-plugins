@@ -8,7 +8,7 @@
       "name": "claude-memory",
       "source": "./plugins/claude-memory",
       "description": "Three-tier cross-session memory for Claude Code: per-session captures consolidate weekly into durable abstractions, auto-injected at session start. Per-project, opt-in, local-only.",
-      "version": "0.3.0",
+      "version": "0.3.2",
       "author": { "name": "Eduardo Souza" }
     },
     {
