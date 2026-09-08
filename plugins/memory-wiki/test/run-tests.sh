@@ -140,8 +140,8 @@ fi
 # --- shipped surface: every declared file exists ---
 missing=""
 for p in README.md skills/lint/SKILL.md commands/lint.md commands/init.md \
-         bin/wiki-lint.sh bin/wiki-lint.ps1 bin/wiki-init.sh bin/_wiki-paths.sh \
-         assets/wiki-README.md; do
+         bin/wiki-lint.sh bin/wiki-lint.ps1 bin/wiki-init.sh bin/wiki-lint-project.sh \
+         bin/_wiki-paths.sh assets/wiki-README.md; do
   [[ -f "$PLUGIN/$p" ]] || missing="$missing $p"
 done
 if [[ -z "$missing" ]]; then
@@ -149,6 +149,44 @@ if [[ -z "$missing" ]]; then
 else
   fail "surface: all declared files present" "missing:$missing"
 fi
+
+# --- commands: no shell resolver in a !`...` substitution ---
+# Claude Code expands only the exact literal ${CLAUDE_PLUGIN_ROOT} in a command body, and
+# it does so before any shell runs. A hand-rolled resolver using ${CLAUDE_PLUGIN_ROOT:-},
+# CLAUDE_SKILL_DIR or a `find` over the plugin cache is therefore never expanded, and the
+# command dies at load time with "Shell substitution failed ... (detail withheld)". This
+# regression has now shipped twice in this repo; pin it.
+bad=""
+for c in "$PLUGIN"/commands/*.md; do
+  sub="$(grep -o '!`[^`]*`' "$c")"
+  [[ -z "$sub" ]] && continue
+  grep -q '\${CLAUDE_PLUGIN_ROOT}' <<< "$sub" || bad="$bad $(basename "$c"):no-plugin-root"
+  grep -qE 'CLAUDE_SKILL_DIR|CLAUDE_PLUGIN_ROOT:-|\bexec\b|plugins/cache' <<< "$sub" \
+    && bad="$bad $(basename "$c"):resolver"
+done
+if [[ -z "$bad" ]]; then
+  pass "commands: substitutions use \${CLAUDE_PLUGIN_ROOT}, not a resolver"
+else
+  fail "commands: substitutions use \${CLAUDE_PLUGIN_ROOT}, not a resolver" "offenders:$bad"
+fi
+
+# --- lint-project: resolves a memory dir, and reports rather than fails without one ---
+NOMEM2="$(mktemp -d)"
+out4="$(bash "$PLUGIN/bin/wiki-lint-project.sh" "$NOMEM2/nope" 2>&1)"; rc4=$?
+if [[ $rc4 -eq 0 ]] && grep -q 'ERROR: no memory dir' <<< "$out4"; then
+  pass "lint-project: missing memory dir reports and exits 0"
+else
+  fail "lint-project: missing memory dir reports and exits 0" "rc=$rc4
+$out4"
+fi
+# A pre-wiki memory dir has no wiki/ subdir; the flat pages there are the thing to audit.
+out5="$(bash "$PLUGIN/bin/wiki-lint-project.sh" "$HERE/fixtures/clean/wiki" 2>&1)"
+if grep -q '^## Structural' <<< "$out5"; then
+  pass "lint-project: audits a memory dir with no wiki/ subdir"
+else
+  fail "lint-project: audits a memory dir with no wiki/ subdir" "$out5"
+fi
+rm -rf "$NOMEM2"
 
 # --- smoke: run against a real memory dir if one exists ---
 # Asserts shape only. Counts change as memory grows and must never be pinned here.
