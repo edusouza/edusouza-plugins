@@ -14,6 +14,11 @@
 # huge backlog can't stall startup; the remainder drains on subsequent starts. Prints
 # NOTHING to stdout (SessionStart stdout becomes injected context). Always exits 0.
 #
+# PERFORMANCE: the per-transcript work is all bash builtins. It used to spawn
+# `basename` + `stat` for EVERY transcript in the project (2N processes at 0.15-1.1s
+# each on Windows); the age test is now one `touch`ed marker compared with `-nt`, and
+# the id comes from parameter expansion. See test/run-tests.sh for the spawn budget.
+#
 # Tuning: CLAUDE_MEMORY_CATCHUP_MAX (default 25) = max sessions captured per start.
 #         CLAUDE_MEMORY_CATCHUP_MIN_AGE (default 120s) = don't capture a transcript
 #         modified more recently than this — it's almost certainly the in-flight current
@@ -35,6 +40,9 @@ PY="$(command -v python 2>/dev/null || command -v python3 2>/dev/null || true)"
 [[ -z "$PY" ]] && exit 0
 
 PAYLOAD="$(cat 2>/dev/null || true)"
+# Both fields are needed and neither is in the environment: the sweep is keyed on the
+# session's OWN cwd (transcripts live in that cwd's project dir, not the main repo's),
+# and the current session id is what keeps this hook from capturing itself.
 PARSED="$(printf '%s' "$PAYLOAD" | "$PY" -c "import sys,json
 try:
     d=json.loads(sys.stdin.read() or '{}')
@@ -60,21 +68,30 @@ CAP_MAX="${CLAUDE_MEMORY_CATCHUP_MAX:-25}"
 case "$CAP_MAX" in (*[!0-9]*|'') CAP_MAX=25;; esac
 MIN_AGE="${CLAUDE_MEMORY_CATCHUP_MIN_AGE:-120}"
 case "$MIN_AGE" in (*[!0-9]*|'') MIN_AGE=120;; esac
-NOW="$(date +%s 2>/dev/null || echo 0)"
+
+# One marker stamped at (now - MIN_AGE) replaces a `stat` per transcript: `-nt` then
+# answers "modified more recently than the cutoff?" as a builtin. If the marker can't
+# be created we drop the age test rather than skip everything, matching the old
+# behavior when `stat` failed (don't skip -> the session_id check still guards us).
+MARKER=""
+if [[ -n "${EPOCHSECONDS:-}" ]]; then
+  _m="$SESS_DIR/.catchup-cutoff.$$"
+  if touch -d "@$(( EPOCHSECONDS - MIN_AGE ))" "$_m" 2>/dev/null; then MARKER="$_m"; fi
+fi
 
 # Synchronous sweep, all output suppressed (must not leak into injected context).
 # Newest-first so a backlog still gets the most relevant recent sessions before the cap.
 {
   count=0
-  while IFS= read -r t; do
+  mapfile -t TRANSCRIPTS < <(ls -t "$TXDIR"/*.jsonl 2>/dev/null)
+  for t in "${TRANSCRIPTS[@]}"; do
     [[ -z "$t" ]] && continue
     [[ "$count" -ge "$CAP_MAX" ]] && break
-    sid="$(basename "$t" .jsonl)"
+    sid="${t##*/}"; sid="${sid%.jsonl}"
     [[ -z "$sid" || "$sid" == "$CUR_SID" ]] && continue
     # Skip the in-flight session even if its id wasn't supplied: a transcript still
     # being written has a very recent mtime. Caught on a later start once it's idle.
-    mtime="$(stat -c %Y "$t" 2>/dev/null || echo 0)"
-    [[ "$NOW" -gt 0 && "$mtime" -gt 0 && $((NOW - mtime)) -lt "$MIN_AGE" ]] && continue
+    [[ -n "$MARKER" && "$t" -nt "$MARKER" ]] && continue
     sid8="${sid:0:8}"
     captured=0
     for n in "$SESS_DIR"/*-"$sid8".md "$SESS_DIR"/archive/*-"$sid8".md; do
@@ -83,7 +100,9 @@ NOW="$(date +%s 2>/dev/null || echo 0)"
     [[ "$captured" -eq 1 ]] && continue
     CAP_CWD="$CWD_RAW" CAP_SID="$sid" CAP_TRANSCRIPT="$t" CAP_NO_GIT=1 bash "$CORE"
     count=$((count + 1))
-  done < <(ls -t "$TXDIR"/*.jsonl 2>/dev/null)
+  done
 } >/dev/null 2>&1
+
+[[ -n "$MARKER" ]] && rm -f "$MARKER" 2>/dev/null
 
 exit 0
