@@ -1,0 +1,12 @@
+## Structural
+  pages                : 2
+  wikilinks            : 4
+  broken links         : 0
+  orphans              : 0
+  missing frontmatter  : 1
+
+  NO FRONTMATTER:
+    concept_beta (missing: description, last_accessed, status)
+
+## Injection budget
+  index region         : 60 B (~16 tokens)

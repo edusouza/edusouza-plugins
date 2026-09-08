@@ -6,3 +6,8 @@
 # Normalize other text files
 *.md text
 *.json text
+
+# Test fixtures are compared byte-for-byte; keep them LF everywhere.
+# Belt-and-braces only — wiki-lint strips CR and must pass on CRLF input regardless.
+plugins/memory-wiki/test/fixtures/** text eol=lf
+plugins/memory-wiki/test/expected/** text eol=lf

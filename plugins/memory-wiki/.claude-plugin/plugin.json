@@ -1,0 +1,7 @@
+{
+  "name": "memory-wiki",
+  "description": "Turns claude-memory's flat Tier-3 concepts into a cross-linked, searchable wiki. Phase 1: lint audits an existing memory dir for broken wikilinks, orphan pages, and missing frontmatter; init scaffolds the wiki layer. Reads what claude-memory writes and never modifies it.",
+  "version": "0.3.0",
+  "author": { "name": "Eduardo Souza" },
+  "license": "MIT"
+}

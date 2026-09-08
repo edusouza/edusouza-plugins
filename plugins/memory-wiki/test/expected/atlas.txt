@@ -1,0 +1,12 @@
+## Structural
+  pages                : 2
+  wikilinks            : 7
+  broken links         : 1
+  orphans              : 0
+  missing frontmatter  : 0
+
+  BROKEN:
+    concept_alpha -> [[atlas/nope]]
+
+## Injection budget
+  index region         : 60 B (~16 tokens)

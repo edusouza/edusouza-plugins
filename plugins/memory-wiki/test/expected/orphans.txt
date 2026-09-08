@@ -1,0 +1,13 @@
+## Structural
+  pages                : 3
+  wikilinks            : 4
+  broken links         : 0
+  orphans              : 2
+  missing frontmatter  : 0
+
+  ORPHANS:
+    concept_alpha
+    concept_gamma
+
+## Injection budget
+  index region         : 90 B (~25 tokens)
