@@ -1,13 +1,16 @@
 ---
 description: Audit this project's memory wiki for broken wikilinks, orphan pages, and missing frontmatter. Runs the bundled wiki-lint script and reports; never fixes anything.
 argument-hint: "[memory-dir]  (defaults to the current project)"
-allowed-tools: Bash(*)
+allowed-tools: Bash
 disable-model-invocation: true
 ---
 
 # Lint the memory wiki
 
-!`for R in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_SKILL_DIR:-}/.." "$(find "$HOME/.claude/plugins/cache/edusouza-plugins/memory-wiki" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort | tail -1)"; do [ -n "$R" ] && [ -x "$R/bin/wiki-lint.sh" ] && { . "$R/bin/_wiki-paths.sh"; M="${ARGUMENTS:-$(wiki_project_dir "$PWD")/memory}"; [ -d "$M" ] || { echo "ERROR: no memory dir: $M"; exit 0; }; W="$M/wiki"; [ -d "$W" ] || W="$M"; exec "$R/bin/wiki-lint.sh" "$W" --sources "$M/episodic/weekly" --atlas "$HOME/.claude/memory-wiki"; }; done; echo "ERROR: could not locate wiki-lint.sh — CLAUDE_PLUGIN_ROOT='${CLAUDE_PLUGIN_ROOT:-}' CLAUDE_SKILL_DIR='${CLAUDE_SKILL_DIR:-}'"`
+Memory-dir resolution and the source/atlas roots live in the bundled script, so this command is just
+its invocation — Claude Code substitutes the plugin root before any shell runs:
+
+!`"${CLAUDE_PLUGIN_ROOT}/bin/wiki-lint-project.sh" "$ARGUMENTS"`
 
 Relay the report above verbatim — it is exhaustive about structure by construction, so do not
 re-derive or summarize the counters.
