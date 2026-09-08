@@ -60,7 +60,15 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
 else
   DATE="$(date +%Y-%m-%d)"
 fi
-TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# printf's %()T is a bash builtin and formats in the current zone, so pin TZ across the
+# one call rather than spawning `date -u`.
+if [[ -n "${EPOCHSECONDS:-}" ]]; then
+  _tz_saved="${TZ-__unset__}"
+  TZ=UTC0 printf -v TS '%(%Y-%m-%dT%H:%M:%SZ)T' "$EPOCHSECONDS"
+  if [[ "$_tz_saved" == "__unset__" ]]; then unset TZ; else TZ="$_tz_saved"; fi
+else
+  TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
 SID8="${CAP_SID:0:8}"; [[ -z "$SID8" ]] && SID8="nosid"
 NOTE="$SESS_DIR/$DATE-$SID8.md"
 
@@ -74,7 +82,9 @@ BRANCH="unknown"; ISSUE=""; COMMITS=""; DIFFSTAT=""; STATUS=""
 if [[ -z "$CAP_NO_GIT" && -n "$CWD" ]] && ( cd "$CWD" 2>/dev/null && git rev-parse --git-dir >/dev/null 2>&1 ); then
   pushd "$CWD" >/dev/null 2>&1 || true
   BRANCH="$(git branch --show-current 2>/dev/null || echo unknown)"
-  ISSUE="$(printf '%s' "$BRANCH" | grep -oE '[0-9]+' | head -1 || true)"
+  # First run of digits in the branch name — a bash regex instead of `grep | head`.
+  ISSUE=""
+  [[ "$BRANCH" =~ ([0-9]+) ]] && ISSUE="${BASH_REMATCH[1]}"
   COMMITS="$(git log --oneline -10 2>/dev/null || true)"
   DIFFSTAT="$(git diff --stat 2>/dev/null | tail -50 || true)"
   STATUS="$(git status --short 2>/dev/null | head -50 || true)"

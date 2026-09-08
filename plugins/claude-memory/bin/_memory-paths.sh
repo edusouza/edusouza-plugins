@@ -6,6 +6,13 @@
 # memory resolves to the MAIN worktree root — so worktree sessions share the main repo's
 # memory instead of fragmenting into a per-worktree dir.
 #
+# PERFORMANCE CONTRACT: every one of these runs inside a SessionStart hook, and on
+# Windows a process spawn costs 0.15-1.1s (measured: git 0.9s, cygpath 0.5s cold). The
+# cost here is dominated by HOW MANY processes start, not by what any of them do, so
+# the path munging below is deliberately pure bash — no cygpath, no sed — and the
+# worktree probe asks git all of its questions in ONE `rev-parse`. Budget: one process
+# per mem_project_dir call, asserted by test/run-tests.sh. Keep it that way.
+#
 # Functions:
 #   mem_to_posix <path>        Windows/POSIX path -> POSIX (git-bash friendly)
 #   mem_resolve_main_root <cwd>  cwd -> main worktree root (or cwd unchanged)
@@ -13,50 +20,87 @@
 #   mem_project_dir <cwd>      worktree-aware project dir (resolve + hash)
 
 # Normalize Windows paths (C:\... or C:/...) to POSIX (/c/...) for git-bash use.
+# Pure bash: this used to shell out to `cygpath -u` (0.5s/call on Windows).
 mem_to_posix() {
-  [[ -z "${1:-}" ]] && return 0
-  if command -v cygpath >/dev/null 2>&1; then
-    cygpath -u "$1" 2>/dev/null || printf '%s' "$1"
-  else
-    printf '%s' "$1" | sed -E 's#^([A-Za-z]):#/\L\1#; s#\\#/#g'
+  local p="${1:-}"
+  [[ -z "$p" ]] && return 0
+  p="${p//\\//}"                 # backslashes -> forward slashes
+  if [[ "$p" == [A-Za-z]:* ]]; then
+    local d="${p:0:1}"
+    p="/${d,}${p:2}"             # C:/x -> /c/x  (${d,} lowercases the drive letter)
   fi
+  printf '%s' "$p"
 }
 
-# Echo the MAIN worktree root for a cwd. Only *linked* worktrees are redirected: the main
-# worktree (incl. any subdirectory) and non-git / git-less cwds echo unchanged, preserving
-# the original behavior for existing users. Detection: a linked worktree's git-dir
-# (<main>/.git/worktrees/<name>) differs from its common-dir (<main>/.git).
+# Echo the MAIN worktree root for a cwd; a cwd outside any repo echoes unchanged.
+# Every in-repo cwd maps to the main root — a linked worktree, a subdirectory, and the
+# repo root all resolve to the same place — so one repo keeps exactly one memory dir
+# instead of fragmenting per worktree or per subdirectory.
+#
+# The git-common-dir is <main>/.git for a linked worktree just as it is for the main
+# worktree (only the git-DIR differs, at <main>/.git/worktrees/<name>), so its parent
+# is the main root in every case and no separate worktree test is needed.
+#
+# NOTE: the previous implementation reached this same result by accident — it compared
+# --absolute-git-dir against --git-common-dir to detect a linked worktree, but the two
+# came back in different notations on Windows (C:/… vs /c/…), so the comparison was
+# always unequal and every in-repo cwd took the redirect branch. The behavior below is
+# identical for every input; it just says so on purpose, in one git call instead of three.
 mem_resolve_main_root() {
-  local cwd="${1:-}" gitdir common main
+  local cwd="${1:-}" pcwd out inside common main
   [[ -z "$cwd" ]] && return 0
-  local pcwd; pcwd="$(mem_to_posix "$cwd")"
-  if ! git -C "$pcwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    printf '%s' "$cwd"; return 0
+  pcwd="$(mem_to_posix "$cwd")"
+
+  # One `rev-parse` answers both questions and returns the common-dir already absolute,
+  # so no second git call and no `cd`-subshell are needed to resolve it. --path-format
+  # needs git >= 2.31; on anything older this fails and the legacy two-call form below
+  # runs instead, rather than silently dropping the redirect.
+  if out="$(git -C "$pcwd" rev-parse --is-inside-work-tree --path-format=absolute --git-common-dir 2>/dev/null)" \
+     && [[ "$out" == *$'\n'* ]]; then
+    inside="${out%%$'\n'*}"
+    common="${out#*$'\n'}"
+    common="${common%%$'\n'*}"
+  else
+    inside="$(git -C "$pcwd" rev-parse --is-inside-work-tree 2>/dev/null)"
+    common="$(git -C "$pcwd" rev-parse --git-common-dir 2>/dev/null)"
+    [[ -n "$common" ]] && common="$(cd "$pcwd" 2>/dev/null && cd "$common" 2>/dev/null && pwd)"
   fi
-  gitdir="$(git -C "$pcwd" rev-parse --absolute-git-dir 2>/dev/null)"
-  # --git-common-dir may be relative to cwd; resolve to absolute via the dir itself.
-  common="$(git -C "$pcwd" rev-parse --git-common-dir 2>/dev/null)"
-  if [[ -n "$common" ]]; then
-    common="$(cd "$pcwd" 2>/dev/null && cd "$common" 2>/dev/null && pwd)"
-  fi
-  if [[ -n "$gitdir" && -n "$common" && "$gitdir" != "$common" ]]; then
-    main="$(dirname "$common")"          # <main>/.git -> <main>
-    [[ -n "$main" ]] && { printf '%s' "$main"; return 0; }
+
+  if [[ "$inside" == "true" && -n "$common" ]]; then
+    main="${common%/*}"                 # <main>/.git -> <main>
+    [[ -n "$main" ]] && { mem_to_posix "$main"; return 0; }
   fi
   printf '%s' "$cwd"
 }
 
 # Echo $HOME/.claude/projects/<hash> for a path, matching how Claude Code names project
 # dirs: convert to a Windows-style path first on Windows, then replace : \ / with '-'.
+# Pure bash: `cygpath -w` + `sed` used to cost two spawns here. Either separator form
+# yields the same hash, since ':', '\' and '/' all map to '-'.
+# POSIX -> mixed Windows form (/c/x -> C:/x), the shape `cygpath -m` produced.
+# A non-drive absolute POSIX path (/tmp/x) is left as-is. `cygpath` used to remap those
+# onto the MSYS root (C:\Program Files\Git\tmp\x), but no such path reaches here: on
+# Windows every cwd Claude Code reports is drive-rooted, and off Windows the old code
+# had no cygpath and took this same branch.
+mem_to_mixed() {
+  local path="${1:-}" d
+  [[ -z "$path" ]] && return 0
+  if [[ "$path" == /[A-Za-z]/* ]]; then
+    d="${path:1:1}"
+    printf '%s' "${d^}:${path:2}"   # /c/x -> C:/x  (${d^} uppercases the drive letter)
+  elif [[ "$path" == /[A-Za-z] ]]; then
+    d="${path:1:1}"
+    printf '%s' "${d^}:/"           # bare drive: cygpath -w '/c' is 'C:\', hashing to 'C--'
+  else
+    printf '%s' "$path"
+  fi
+}
+
 mem_hash_dir() {
   local path="${1:-}" win hash
   [[ -z "$path" ]] && return 0
-  if command -v cygpath >/dev/null 2>&1; then
-    win="$(cygpath -w "$path" 2>/dev/null || printf '%s' "$path")"
-  else
-    win="$path"
-  fi
-  hash="$(printf '%s' "$win" | sed 's#[:\\/]#-#g')"
+  win="$(mem_to_mixed "$path")"
+  hash="${win//\\/-}"; hash="${hash//\//-}"; hash="${hash//:/-}"
   printf '%s' "$HOME/.claude/projects/$hash"
 }
 
