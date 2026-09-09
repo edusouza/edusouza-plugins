@@ -509,13 +509,53 @@ for p in README.md skills/lint/SKILL.md commands/lint.md commands/init.md \
          bin/wiki-lint.sh bin/wiki-lint.ps1 bin/wiki-init.sh bin/wiki-lint-project.sh \
          bin/wiki-index.py bin/wiki-index.sh \
          bin/wiki-log.sh bin/wiki-ingest-plan.sh \
-         bin/_wiki-paths.sh assets/wiki-README.md; do
+         bin/_wiki-paths.sh assets/wiki-README.md \
+         skills/ingest/references/page-authoring.md; do
   [[ -f "$PLUGIN/$p" ]] || missing="$missing $p"
 done
 if [[ -z "$missing" ]]; then
   pass "surface: all declared files present"
 else
   fail "surface: all declared files present" "missing:$missing"
+fi
+
+# --- authoring reference: both worked exemplars survive an edit ---
+# Deliberately shallow. Page prose is judgment, and pinning a word of it here would
+# turn every improvement to the reference into a test failure. What is pinned is that
+# a *complete* worked example of each specially-treated type is still in the file:
+# failure_ (the only type with `symptom:`, the line the session-start index renders
+# verbatim) and component_ (the only type with `part_of:`).
+#
+# Every pattern is anchored to the start of a line, which is what makes this more than
+# a word search. Prose mentions and bullets ("- `type: failure` also needs `symptom:`")
+# are indented or prefixed and cannot match; the frontmatter *template* in the same
+# reference spells `type:` as the union `project | component | tech | failure | concept`
+# and lists the per-type extras in a markdown table, so it cannot satisfy these either.
+# Only a real frontmatter block inside a worked exemplar can.
+#
+# The file-absent branch is explicit rather than left to grep's non-zero exit: an empty
+# or deleted file must report *why* it failed, not just list four unmatched patterns.
+#
+# CR is stripped before matching, for the same reason the render and parity checks strip
+# it, and here it is load-bearing rather than cosmetic: .gitattributes marks *.md as
+# `text` with no eol, so with core.autocrlf=true — the default on the Windows clone this
+# is developed on — every checked-out .md in the working tree is CRLF. A `$`-anchored
+# pattern would then never match the trailing CR, and this check would report a missing
+# exemplar on every fresh clone while passing on the machine that wrote the file.
+AUTHREF="skills/ingest/references/page-authoring.md"
+missing=""
+if [[ ! -s "$PLUGIN/$AUTHREF" ]]; then
+  missing=" $AUTHREF is absent or empty"
+else
+  authref_body="$(tr -d '\r' < "$PLUGIN/$AUTHREF")"
+  for pat in '^type: failure$' '^symptom:' '^type: component$' '^part_of:'; do
+    grep -qE "$pat" <<< "$authref_body" || missing="$missing no line matches: $pat;"
+  done
+fi
+if [[ -z "$missing" ]]; then
+  pass "authoring: reference carries a worked failure_ and component_ exemplar"
+else
+  fail "authoring: reference carries a worked failure_ and component_ exemplar" "$missing"
 fi
 
 # --- commands: no shell resolver in a !`...` substitution ---
