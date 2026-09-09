@@ -12,9 +12,6 @@ judgment left is which pages to write and what they say, and the rules for that 
 
 Work through the eight steps in order. Step 1 can end the run on its own.
 
-`${CLAUDE_PLUGIN_ROOT}` below is this plugin's directory. If it is not set in the shell you get,
-the same scripts are reachable by absolute path under the plugin's own `bin/`.
-
 ## 1. Get the work order
 
 ```bash

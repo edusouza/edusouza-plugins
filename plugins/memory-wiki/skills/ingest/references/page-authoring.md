@@ -123,6 +123,9 @@ Those five are required on every page, whatever its type. Some types require mor
 | `failure` | `symptom`, `sources` |
 | `concept` | nothing extra |
 
+One further field is keyed on `status:` rather than on `type:`, so it sits outside that table: a
+page marked `status: superseded` also carries `superseded_by:`, whatever its type.
+
 Field by field:
 
 - **`name:`** — a human title in sentence case. Not the filename.
@@ -135,8 +138,9 @@ Field by field:
   then never judged against any type's extra requirements at all — so a typo'd `type:` silently
   buys the page an exemption from needing `symptom:` or `part_of:`.
 - **`status:`** — `active` unless the page describes something no longer in use (`dormant`) or has
-  been replaced by another page (`superseded`, and link the replacement in the body). Dormant and
-  superseded pages are dropped from the generated index but are never deleted.
+  been replaced by another page (`superseded`, which additionally requires `superseded_by:` below,
+  and link the replacement in the body too). Dormant and superseded pages are dropped from the
+  generated index but are never deleted.
 - **`last_accessed:`** — the date of the run that last wrote the page. Update it on every edit.
 - **`sources:`** — a flow list of rollup wikilinks: `sources: ["[[2026-W27]]", "[[2026-W31]]"]`.
   This is what makes a claim checkable: it is the trail back to what actually happened. When
@@ -147,6 +151,17 @@ Field by field:
 - **`part_of:`** — one wikilink to the owning project page: `part_of: "[[project_claude-plugins]]"`.
   It has to name a page that already exists or one the same run creates. A component pointing at a
   project page nobody wrote is a broken link and an unattached component in a single line.
+- **`superseded_by:`** — one wikilink to the page that replaced this one:
+  `superseded_by: "[[failure_slash-command-shell-substitution]]"`. Written only alongside
+  `status: superseded`; no other status uses it. Optional in the schema's sense — no `type:`
+  requires it and `lint` never asks for it — but not optional in practice, because it is the whole
+  reason to mark a page superseded rather than delete it: it tells a reader who arrives at the old
+  page, from an inbound link or from the rollup that still cites it, which page is current. Without
+  it a superseded page is a dead end rather than a redirect, and nothing will report the omission —
+  `lint` checks that a type's required fields are present and that `type:` and `status:` hold
+  in-range values, and has no opinion about any other key. Keep the old page's inbound links too: a
+  superseded page is dropped from the generated index but is still orphan-checked, so removing the
+  last link to it trades a stale page for an orphan.
 
 ### `symptom:` — quote what you would see
 

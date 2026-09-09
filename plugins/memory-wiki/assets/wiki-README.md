@@ -58,6 +58,10 @@ Some types require more than the base:
 - **`sources:` is what makes a claim checkable.** Every page but a `concept_` is distilled from a
   weekly rollup, and the citation is what lets a later reader trace the claim back to what actually
   happened. `concept_` pages are exempt because `claude-memory` owns them and cites elsewhere.
+- **`superseded_by:` accompanies `status: superseded`**, whatever the page's type:
+  `superseded_by: "[[component_new-thing]]"`, one wikilink to the page that replaced this one. No
+  `type:` requires it and `lint` does not check for it, but a superseded page without it is a dead
+  end — the reader who lands on it has no way to find the page that is current.
 
 `lint` reports an absent field and an out-of-range value as **separate** findings: a missing
 `type:`/`status:` appears under `NO FRONTMATTER`, while a value outside the lists above appears
