@@ -31,4 +31,7 @@ fi
 WIKI="$MEM/wiki"
 [[ -d "$WIKI" ]] || WIKI="$MEM"
 
-bash "$DIR/wiki-lint.sh" "$WIKI" --sources "$MEM/episodic/weekly" --atlas "$HOME/.claude/memory-wiki"
+# --concepts points at the memory dir itself: the flat root concept_*.md files there are
+# claude-memory's, not memory-wiki's. They are link targets a generated page may legitimately
+# cite, and never pages of this wiki — so they resolve, but are not counted or orphan-checked.
+bash "$DIR/wiki-lint.sh" "$WIKI" --sources "$MEM/episodic/weekly" --atlas "$HOME/.claude/memory-wiki" --concepts "$MEM"

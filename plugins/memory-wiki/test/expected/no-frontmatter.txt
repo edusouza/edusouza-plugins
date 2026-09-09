@@ -4,6 +4,7 @@
   broken links         : 0
   orphans              : 0
   missing frontmatter  : 1
+  schema errors        : 0
 
   NO FRONTMATTER:
     concept_beta (missing: description, last_accessed, status)

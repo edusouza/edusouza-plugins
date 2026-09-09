@@ -47,6 +47,8 @@ run_fixture broken
 run_fixture atlas --sources "$HERE/fixtures/atlas/sources" --atlas "$HERE/fixtures/atlas/atlas"
 run_fixture orphans
 run_fixture no-frontmatter
+run_fixture schema --sources "$HERE/fixtures/schema/sources"
+run_fixture typed --sources "$HERE/fixtures/typed/sources" --concepts "$HERE/fixtures/typed/concepts"
 
 # --- path helpers ---
 # shellcheck source=/dev/null
@@ -133,6 +135,12 @@ if command -v pwsh >/dev/null 2>&1; then
   parity orphans
   parity no-frontmatter
   parity atlas "$HERE/fixtures/atlas/sources" "$HERE/fixtures/atlas/atlas"
+  parity schema "$HERE/fixtures/schema/sources"
+  # parity has no --concepts slot, so both sides run without one and both report the same two
+  # broken links to [[concept_root-heuristic]]. That is still a valid parity assertion — the
+  # contract under test is that the two scripts agree, not that they agree only when fully
+  # argumented. Do not widen the helper for this.
+  parity typed "$HERE/fixtures/typed/sources"
 else
   pass "parity: skipped (pwsh not on PATH)"
 fi

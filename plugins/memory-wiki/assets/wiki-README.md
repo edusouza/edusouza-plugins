@@ -41,7 +41,29 @@ last_accessed: YYYY-MM-DD
 ---
 ```
 
-Flat, not nested under a `metadata:` key. `lint` reports any page missing a field.
+Flat, not nested under a `metadata:` key — `lint` reads only top-level keys, so an indented one is
+invisible to it and the page reports as though the field were absent.
+
+Some types require more than the base:
+
+| `type:` | also required |
+| --- | --- |
+| `project`, `tech` | `sources` |
+| `component` | `part_of`, `sources` |
+| `failure` | `symptom`, `sources` |
+| `concept` | nothing extra |
+
+- **`symptom:` is what a failure page is found by.** Recall matches the error text in front of you
+  against that line, so a failure page without one is unreachable by the only search anyone runs.
+- **`sources:` is what makes a claim checkable.** Every page but a `concept_` is distilled from a
+  weekly rollup, and the citation is what lets a later reader trace the claim back to what actually
+  happened. `concept_` pages are exempt because `claude-memory` owns them and cites elsewhere.
+
+`lint` reports an absent field and an out-of-range value as **separate** findings: a missing
+`type:`/`status:` appears under `NO FRONTMATTER`, while a value outside the lists above appears
+under `SCHEMA` as `<page> (invalid: type=<v>)`. A page with no readable top-level `type:` is
+reported once, for the missing field, and is not additionally judged against any type's extra
+requirements.
 
 ## Directories
 
@@ -51,5 +73,5 @@ Flat, not nested under a `metadata:` key. `lint` reports any page missing a fiel
 
 ## Maintenance
 
-Run `/memory-wiki:lint` to audit this wiki for broken links, orphans, and missing frontmatter. It
-reports; it never fixes.
+Run `/memory-wiki:lint` to audit this wiki for broken links, orphans, missing frontmatter, and
+schema errors. It reports; it never fixes.

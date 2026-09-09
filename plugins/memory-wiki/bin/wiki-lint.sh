@@ -2,7 +2,7 @@
 # Structural audit of a memory-wiki. Pure function: takes a directory, prints a
 # deterministic report, exits 0. Reports only — never fixes, never writes.
 #
-# Usage: wiki-lint.sh <WIKI_DIR> [--sources <DIR>] [--atlas <DIR>]
+# Usage: wiki-lint.sh <WIKI_DIR> [--sources <DIR>] [--atlas <DIR>] [--concepts <DIR>]
 set -uo pipefail
 
 # Deterministic collation. Without this, `sort` ignores punctuation under some locales
@@ -10,12 +10,13 @@ set -uo pipefail
 # would never reproduce. Byte order everywhere.
 export LC_ALL=C
 
-WIKI=""; SOURCES=""; ATLAS=""
+WIKI=""; SOURCES=""; ATLAS=""; CONCEPTS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --sources) SOURCES="${2:-}"; shift 2 ;;
-    --atlas)   ATLAS="${2:-}";   shift 2 ;;
-    *)         WIKI="$1";        shift ;;
+    --sources)  SOURCES="${2:-}";  shift 2 ;;
+    --atlas)    ATLAS="${2:-}";    shift 2 ;;
+    --concepts) CONCEPTS="${2:-}"; shift 2 ;;
+    *)          WIKI="$1";         shift ;;
   esac
 done
 
@@ -33,10 +34,23 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 # MEMORY.md is included because a pre-wiki memory dir has no index.md — MEMORY.md IS
 # the index there, and linting <memdir> directly is the Phase 1 entry point. Omitting
 # it reports the index as an orphan with no frontmatter, which is noise, not a finding.
-is_structural() { [[ "$1" == "index" || "$1" == "log" || "$1" == "MEMORY" ]]; }
+# README.md is the page schema wiki-init.sh copies into every new wiki — it is the document
+# that defines the schema, not a page written against it. Audited as content it reports its
+# own placeholders ([[atlas/<page>]], [[exact-filename-without-extension]]) as broken links and
+# itself as a frontmatter-less orphan, so every freshly scaffolded wiki would be born with two
+# false positives.
+is_structural() { [[ "$1" == "index" || "$1" == "log" || "$1" == "MEMORY" || "$1" == "README" ]]; }
+
+# Reads one top-level frontmatter key ($1) out of a frontmatter body ($2), stripping the key,
+# any surrounding quotes and any trailing whitespace, so `type: "failure"` and `type: failure `
+# both compare equal to `failure`.
+fm_value() {
+  sed -n "s/^$1:[[:space:]]*//p" <<< "$2" | head -n 1 |
+    sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
 
 # --- collect page names and per-page link lists ---
-: > "$TMP/pages"; : > "$TMP/links"; : > "$TMP/inbound"; : > "$TMP/nofm"
+: > "$TMP/pages"; : > "$TMP/links"; : > "$TMP/inbound"; : > "$TMP/nofm"; : > "$TMP/schema"
 LINK_COUNT=0
 
 for f in "$WIKI"/*.md; do
@@ -45,18 +59,53 @@ for f in "$WIKI"/*.md; do
   is_structural "$base" || echo "$base" >> "$TMP/pages"
 
   # Frontmatter must be a --- fenced block starting on line 1 AND carry every
-  # required field. Fields are checked in alphabetical order so the reported list
-  # is sorted without a separate sort step.
+  # required field. Which fields those are depends on the page's own type:, so the
+  # list is built per page and sorted once, keeping the reported line alphabetical
+  # without a separate sort step.
   if ! is_structural "$base"; then
     if [[ "$(head -n 1 "$f" | tr -d '\r')" != "---" ]]; then
       echo "$base (no frontmatter)" >> "$TMP/nofm"
     else
       fm="$(awk 'NR==1{next} /^---[[:space:]]*$/{exit} {print}' "$f" | tr -d '\r')"
+
+      # Only top-level keys are read — `^type:`, never ` type:`. Pages written by the global
+      # auto-memory nest their keys under a `metadata:` block, which indents them out of every
+      # match here, and that is the wanted behaviour: such a page has no parseable type, so it
+      # reports its absent `type` once as a missing field and is exempt from both the
+      # type-specific requirements and the value checks below. One schema collision must not
+      # cascade into three findings.
+      type_v="$(fm_value type "$fm")"
+      status_v="$(fm_value status "$fm")"
+
+      req=(description last_accessed name status type)
+      case "$type_v" in
+        failure)      req+=(sources symptom) ;;
+        component)    req+=(part_of sources) ;;
+        project|tech) req+=(sources) ;;
+      esac
       missing=""
-      for field in description last_accessed name status type; do
+      while IFS= read -r field; do
         grep -qE "^${field}:" <<< "$fm" || missing="${missing:+$missing, }$field"
-      done
+      done < <(printf '%s\n' "${req[@]}" | sort)
       [[ -n "$missing" ]] && echo "$base (missing: $missing)" >> "$TMP/nofm"
+
+      # A field that is out of range is a different finding from one that is absent, and
+      # absent fields are already reported above — so each value is judged only where it is
+      # actually present.
+      if [[ -n "$type_v" ]]; then
+        invalid=""
+        case "$type_v" in
+          project|component|tech|failure|concept) ;;
+          *) invalid="type=$type_v" ;;
+        esac
+        if [[ -n "$status_v" ]]; then
+          case "$status_v" in
+            active|dormant|superseded) ;;
+            *) invalid="${invalid:+$invalid, }status=$status_v" ;;
+          esac
+        fi
+        [[ -n "$invalid" ]] && echo "$base (invalid: $invalid)" >> "$TMP/schema"
+      fi
     fi
   fi
 
@@ -71,6 +120,7 @@ done
 sort -u -o "$TMP/pages" "$TMP/pages"
 PAGE_COUNT=$(wc -l < "$TMP/pages" | tr -d ' ')
 NOFM_COUNT=$(sort -u "$TMP/nofm" | grep -c . || true)
+SCHEMA_COUNT=$(sort -u "$TMP/schema" | grep -c . || true)
 
 # --- resolvable-name sets ---
 : > "$TMP/known"
@@ -78,13 +128,24 @@ cat "$TMP/pages" >> "$TMP/known"
 if [[ -n "$SOURCES" && -d "$SOURCES" ]]; then
   for f in "$SOURCES"/*.md; do [[ -e "$f" ]] && basename "$f" .md >> "$TMP/known"; done
 fi
+# claude-memory's flat root concept_*.md files are legitimate link targets but are not pages of
+# this wiki: they live outside it and memory-wiki never writes them. Counting them as pages
+# would report every unlinked one as an orphan of a wiki it is not part of, and would inflate
+# the page count with files this plugin does not own. So they go into `known` — resolvable —
+# and never into `pages`, which is what gets counted and orphan-checked.
+if [[ -n "$CONCEPTS" && -d "$CONCEPTS" ]]; then
+  for f in "$CONCEPTS"/*.md; do [[ -e "$f" ]] && basename "$f" .md >> "$TMP/known"; done
+fi
 : > "$TMP/known_atlas"
 if [[ -n "$ATLAS" && -d "$ATLAS" ]]; then
   for f in "$ATLAS"/*.md; do [[ -e "$f" ]] && basename "$f" .md >> "$TMP/known_atlas"; done
 fi
-# index.md and log.md are real files and are legitimate link targets even though they
-# are excluded from the page count.
-for s in index log; do [[ -f "$WIKI/$s.md" ]] && echo "$s" >> "$TMP/known"; done
+# index.md, log.md and README.md are real files and are legitimate link targets even
+# though they are excluded from the page count. README.md must be listed here now that
+# is_structural() keeps it out of the page set: it used to resolve only because it was a
+# page, and the PowerShell twin adds every structural file it finds, so dropping it here
+# would make `[[README]]` report broken on the bash side alone.
+for s in index log README; do [[ -f "$WIKI/$s.md" ]] && echo "$s" >> "$TMP/known"; done
 sort -u -o "$TMP/known" "$TMP/known"
 sort -u -o "$TMP/known_atlas" "$TMP/known_atlas"
 
@@ -116,6 +177,7 @@ printf '  %-20s : %s\n' "wikilinks" "$LINK_COUNT"
 printf '  %-20s : %s\n' "broken links" "$BROKEN_COUNT"
 printf '  %-20s : %s\n' "orphans" "$ORPHAN_COUNT"
 printf '  %-20s : %s\n' "missing frontmatter" "$NOFM_COUNT"
+printf '  %-20s : %s\n' "schema errors" "$SCHEMA_COUNT"
 
 if [[ "$BROKEN_COUNT" -gt 0 ]]; then
   echo ""; echo "  BROKEN:"
@@ -130,6 +192,11 @@ fi
 if [[ "$NOFM_COUNT" -gt 0 ]]; then
   echo ""; echo "  NO FRONTMATTER:"
   sort -u "$TMP/nofm" | sed 's/^/    /'
+fi
+
+if [[ "$SCHEMA_COUNT" -gt 0 ]]; then
+  echo ""; echo "  SCHEMA:"
+  sort -u "$TMP/schema" | sed 's/^/    /'
 fi
 
 echo ""
