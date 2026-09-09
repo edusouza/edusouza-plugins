@@ -1,6 +1,6 @@
 ## Structural
   pages                : 2
-  wikilinks            : 8
+  wikilinks            : 5
   broken links         : 1
   orphans              : 0
   missing frontmatter  : 0

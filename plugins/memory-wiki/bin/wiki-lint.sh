@@ -109,6 +109,14 @@ for f in "$WIKI"/*.md; do
     fi
   fi
 
+  # README.md is not a participant in the link graph at all — neither counted nor classified.
+  # It is prose *about* the link syntax, and its [[...]] are illustrations that cannot resolve
+  # by construction, so every freshly scaffolded wiki would otherwise report them as broken
+  # links its owner cannot fix. index.md and log.md are the opposite: real indexes whose links
+  # are real edges to real pages, so one pointing at a page that no longer exists is a genuine
+  # finding. They are exempt from inbound-edge accounting only; README is exempt from both.
+  [[ "$base" == "README" ]] && continue
+
   # [[target]] — stop at ] | or #, so aliases and anchors resolve to the page
   while IFS= read -r target; do
     [[ -n "$target" ]] || continue
@@ -153,12 +161,6 @@ sort -u -o "$TMP/known_atlas" "$TMP/known_atlas"
 : > "$TMP/broken"
 while IFS='|' read -r from to; do
   [[ -n "$to" ]] || continue
-  # README.md is the only structural file whose links are not edges. It is prose *about* the
-  # link syntax, and its [[...]] are illustrations that cannot resolve by construction — so
-  # every freshly scaffolded wiki would report them as broken links its owner cannot fix.
-  # index.md and log.md are the opposite: they are real indexes of the graph, and one pointing
-  # at a page that no longer exists is a genuine finding. Only README is exempt.
-  [[ "$from" == "README" ]] && continue
   if [[ "$to" == atlas/* ]]; then
     if grep -qxF "${to#atlas/}" "$TMP/known_atlas"; then
       continue

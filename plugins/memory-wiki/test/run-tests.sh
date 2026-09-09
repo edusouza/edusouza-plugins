@@ -48,6 +48,7 @@ run_fixture atlas --sources "$HERE/fixtures/atlas/sources" --atlas "$HERE/fixtur
 run_fixture orphans
 run_fixture no-frontmatter
 run_fixture readme
+run_fixture casing
 run_fixture schema --sources "$HERE/fixtures/schema/sources"
 run_fixture typed --sources "$HERE/fixtures/typed/sources" --concepts "$HERE/fixtures/typed/concepts"
 
@@ -140,6 +141,10 @@ if command -v pwsh >/dev/null 2>&1; then
   # the twins, not against a golden — bash listed its structural link targets explicitly while
   # the twin derived them from $structural.
   parity readme
+  # casing likewise: the structural exemption is four exact filenames, and PowerShell's -notin
+  # ignored case where bash's == does not, so Readme.md was a page on one twin and structural
+  # on the other.
+  parity casing
   parity schema "$HERE/fixtures/schema/sources"
   # parity has no --concepts slot, so both sides run without one and both report the same two
   # broken links to [[concept_root-heuristic]]. That is still a valid parity assertion — the

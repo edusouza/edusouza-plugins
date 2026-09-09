@@ -59,7 +59,10 @@ foreach ($f in Get-ChildItem $WikiDir -Filter *.md -File | Sort-Object Name) {
   $body = ((Get-Content $f.FullName -Raw) -replace "`r", '')
   $lines = $body -split "`n"
 
-  if ($base -notin $structural) {
+  # -cnotin, not -notin: the exemption is exactly the four filenames the scaffolder writes, and
+  # bash matches them case-sensitively. Anything else — Readme.md included — is user-authored
+  # content and must be audited as a page rather than silently hidden from the audit.
+  if ($base -cnotin $structural) {
     $pages += $base
     if ($lines[0] -ne '---') {
       $nofm += "$base (no frontmatter)"
@@ -98,6 +101,10 @@ foreach ($f in Get-ChildItem $WikiDir -Filter *.md -File | Sort-Object Name) {
     }
   }
 
+  # README is not a participant in the link graph — neither counted nor classified. index and
+  # log are: their links are real edges. See the matching comment in wiki-lint.sh.
+  if ($base -ceq 'README') { continue }
+
   foreach ($m in $linkRx.Matches($body)) {
     $t = $m.Groups[1].Value -replace '\s+$', ''
     if ($t) { $linkCount++; $links += ,@($base, $t) }
@@ -125,18 +132,17 @@ if ($Atlas -and (Test-Path $Atlas)) {
 $broken = @()
 foreach ($l in $links) {
   $from = $l[0]; $to = $l[1]
-  # README's links are illustrations of the syntax, not edges; index and log keep their
-  # classification. See the matching comment in wiki-lint.sh.
-  if ($from -ceq 'README') { continue }
-  if ($to -like 'atlas/*') {
+  # -clike / -cnotin for the same reason as everywhere else here: bash's `== atlas/*` and
+  # is_structural() are case-sensitive, so `[[Atlas/x]]` is an ordinary name on both sides.
+  if ($to -clike 'atlas/*') {
     if ($knownAtlas.Contains($to.Substring(6))) { continue }
   } elseif ($known.Contains($to)) {
-    if ($from -notin $structural) { $inbound += $to }
+    if ($from -cnotin $structural) { $inbound += $to }
     continue
   }
   $broken += "$from -> [[$to]]"
 }
-$orphans = @($pages | Where-Object { $_ -notin $inbound })
+$orphans = @($pages | Where-Object { $_ -cnotin $inbound })
 $nofm = @(Sort-Ordinal ($nofm | Select-Object -Unique))
 $schema = @(Sort-Ordinal ($schema | Select-Object -Unique))
 
