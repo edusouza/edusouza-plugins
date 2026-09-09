@@ -136,8 +136,13 @@ Field by field:
 - **`last_accessed:`** — the date of the run that last wrote the page. Update it on every edit.
 - **`sources:`** — a flow list of rollup wikilinks: `sources: ["[[2026-W27]]", "[[2026-W31]]"]`.
   This is what makes a claim checkable: it is the trail back to what actually happened. When
-  updating a page, **add** the new rollup, never replace the list.
+  updating a page, **add** the new rollup, never replace the list. Cite the rollup the material
+  genuinely came from even when part of what it concluded has since been reversed, and say in the
+  body which part no longer holds — a citation picked for tidiness rather than provenance turns the
+  field into decoration, and decoration is the one thing `sources:` must never be.
 - **`part_of:`** — one wikilink to the owning project page: `part_of: "[[project_claude-plugins]]"`.
+  It has to name a page that already exists or one the same run creates. A component pointing at a
+  project page nobody wrote is a broken link and an unattached component in a single line.
 
 ### `symptom:` — quote what you would see
 
@@ -276,12 +281,11 @@ type: failure
 status: active
 last_accessed: 2026-09-08
 symptom: "Shell substitution failed for pattern"
-sources: ["[[2026-W31]]"]
+sources: ["[[2026-W24]]"]
 ---
 ## Symptom
 
-Invoking a plugin's slash command fails immediately, before any of the command body reaches
-the model:
+A plugin's slash command fails the moment it is invoked, before its body reaches the model:
 
 ```
 Shell substitution failed for pattern "..." (detail withheld on this connection)
@@ -297,14 +301,13 @@ no-op.
 
 Claude Code expands exactly one thing in a command body, textually, before any shell is
 spawned: the literal `${CLAUDE_PLUGIN_ROOT}`. The substitution is a plain global regex over
-that exact string (it also normalises `\` to `/`). Anything that merely looks like it —
+that exact string, and it also normalises `\` to `/`. Anything that merely resembles it —
 `${CLAUDE_PLUGIN_ROOT:-}` with a default, unbraced `$CLAUDE_PLUGIN_ROOT`, `CLAUDE_SKILL_DIR`,
-or a `find` over `plugins/cache` written to "locate the plugin's own directory" — is left
-untouched and reaches the shell as an ordinary reference to an unset variable. The spawn then
-produces no normal result at all, which is the condition this message reports; the detail is
-suppressed on this connection, so the snippet it quotes back tells you nothing about which
-line broke. It is logged internally as a spawn failure, not a script error, which is why the
-quoted snippet reads misleadingly like a broken script.
+or a `find` over `plugins/cache` written to locate the plugin's own directory — is left
+untouched and reaches the shell as a reference to a name that was never in its environment.
+The spawn then produces no normal result, which is what this message reports — logged
+internally as a spawn failure, not a script error, which is why the snippet it quotes back
+reads like a broken script.
 
 ## Fix
 
@@ -315,21 +318,42 @@ Delete the resolver and address the file through the literal form:
 ```
 
 Never `exit` or `exec` inside a substitution block — they terminate or replace the shell
-rather than returning output. If the command only needs to *display* a path, drop the
-substitution altogether: no shell, no failure mode, and no `Bash` entry needed in
-`allowed-tools`.
+rather than returning output. If the command only needs to *show* a path, drop the
+substitution entirely: no shell, no failure mode, no `allowed-tools` entry.
+
+**This reverses the fix recorded in [[2026-W24]].** That week saw the same failure and read it
+correctly — inside a command, `$CLAUDE_PLUGIN_ROOT` and `$CLAUDE_SKILL_DIR` really are empty,
+since only hooks get those names in their environment — but drew the wrong conclusion: that a
+command must therefore carry a filesystem fallback locating itself under
+`$HOME/.claude/plugins/cache/`. The observation holds; the conclusion does not, because the
+literal `${CLAUDE_PLUGIN_ROOT}` is never a name the shell resolves — it is gone before the
+shell starts. The fallback resolver W24 added *is* the defect this page describes.
 
 ## Generalisation
 
 Expect this defect to be copied forward when a plugin is scaffolded from a sibling — grep
 every `plugins/*/commands/*.md` for `CLAUDE_SKILL_DIR`, `:-}` and `plugins/cache` after
 fixing one. It shipped in [[component_claude-memory]] and was then inherited verbatim by the
-plugin scaffolded from it. See [[concept_slash_command_bash_needs_allowed_tools]].
+plugin scaffolded from it. And when a page corrects an earlier fix, name the reasoning it
+supersedes instead of quietly replacing it: the rollup that recorded that reasoning is
+immutable and still on disk, so a reader who finds it and not this page will derive the
+resolver again. See [[concept_slash_command_bash_needs_allowed_tools]].
 ````
 
 Note what makes it findable: `symptom:` is the string that appears on screen, so the index line it
 renders matches a paste of the error. The body quotes the error again, in full, under `## Symptom` —
 the frontmatter line is the hook, the fenced block is the confirmation.
+
+Note also what it does with a source whose conclusion turned out to be wrong. It cites `[[2026-W24]]`
+anyway, because that is the week the material actually comes from, and then says plainly which part
+of it no longer holds. Dropping the citation to avoid the awkwardness would have been worse than
+useless: `sources:` is the only thing that makes a claim checkable, and a citation chosen for
+tidiness rather than provenance quietly turns the field into decoration.
+
+The page itself stays `status: active`. What was superseded is a conclusion inside an earlier
+source, which this page corrects in place and names; `status: superseded` is for a page that another
+page has replaced wholesale. Correcting a source without saying what you are correcting is how a
+corrected mistake gets re-derived from the rollup that still records it.
 
 ---
 
@@ -377,6 +401,13 @@ Owns this project's memory: Tier 1 session notes, Tier 2 weekly rollups under
   using the literal plugin-root variable — [[failure_slash-command-shell-substitution]].
 ````
 
+**`part_of:` must name a page that already exists, or one the same run creates.** The exemplar
+points at `[[project_claude-plugins]]` to show the shape of the field, and there is no such page
+here to point at — copy that line into a real wiki and you get a broken link plus a component
+attached to nothing. Write the `project_` page first, or point `part_of:` at the project page that
+is already there. The same caution applies to every other `[[link]]` in both exemplars: they
+illustrate the form, and each one has to name a real file in the wiki you are actually writing.
+
 Three things to copy from it. Decisions are **dated and newest first**, so a later decision that
 contradicts an earlier one is visibly the later one. Each carries its **own** citation rather than
 leaning on `sources:`, so a reader checking one claim does not have to read every rollup the page
@@ -395,7 +426,7 @@ type: component
 status: active
 last_accessed: 2026-09-08
 ---
-Fixed the consolidation bug in `claude-memory`. See commit `d84e5af`.
+Fixed the consolidation bug in `claude-memory`. See commit `a1b2c3d`.
 ````
 
 Four defects, each fatal on its own:
@@ -410,7 +441,7 @@ Four defects, each fatal on its own:
    label. That line is what renders in the index Map, and the Map is how a page gets opened at all;
    nobody hitting a consolidation failure types "notes about memory". `name: Memory notes` is the
    same defect in the same page.
-4. **A body whose only content points at a commit git already holds.** `git show d84e5af` is
+4. **A body whose only content points at a commit git already holds.** `git show a1b2c3d` is
    faster, complete, and cannot go stale. The page contributes no symptom to match on, no mechanism
    to reason from, and nothing transferable to another repo — the three things a page is for.
 
