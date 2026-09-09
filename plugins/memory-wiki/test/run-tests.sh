@@ -503,20 +503,88 @@ else
   pass "parity: skipped (pwsh not on PATH)"
 fi
 
-# --- shipped surface: every declared file exists ---
+# --- shipped surface: every declared file exists and has content ---
+# `-s`, not `-f`. A zero-byte SKILL.md, command or script is present in exactly the sense
+# `-f` tests for and useless in every other: Claude Code loads it, finds no frontmatter, and
+# the surface silently is not there. That is the harness's own recurring failure shape — a
+# check that holds on an empty file — so the emptiness is caught here rather than left to
+# whichever later check happens to read the file's contents.
 missing=""
 for p in README.md skills/lint/SKILL.md commands/lint.md commands/init.md \
          bin/wiki-lint.sh bin/wiki-lint.ps1 bin/wiki-init.sh bin/wiki-lint-project.sh \
          bin/wiki-index.py bin/wiki-index.sh \
          bin/wiki-log.sh bin/wiki-ingest-plan.sh \
          bin/_wiki-paths.sh assets/wiki-README.md \
-         skills/ingest/references/page-authoring.md; do
-  [[ -f "$PLUGIN/$p" ]] || missing="$missing $p"
+         skills/ingest/references/page-authoring.md \
+         skills/ingest/SKILL.md commands/ingest.md; do
+  [[ -s "$PLUGIN/$p" ]] || missing="$missing $p"
 done
 if [[ -z "$missing" ]]; then
   pass "surface: all declared files present"
 else
   fail "surface: all declared files present" "missing:$missing"
+fi
+
+# --- ingest surface: the frontmatter Claude Code actually reads ---
+# Presence is not the contract. Everything that decides whether these two files work at all
+# lives in their frontmatter, and every field below fails silently when it is wrong: a skill
+# whose `name:` is not `ingest` is invocable under a different name than the command and the
+# nudge point at; a command missing `disable-model-invocation: true` becomes a second
+# model-invocable surface competing with the skill (its Phase 1 siblings all carry it); and a
+# command whose `allowed-tools` omits a tool cannot use it — an ingest that cannot Write is a
+# run that reads the whole work order and produces nothing.
+#
+# Matching happens against the frontmatter block ALONE — the lines between the `---` on line 1
+# and the next `---` — so nothing here can be satisfied by prose, by a bullet describing the
+# field, or by a fenced code block further down the file quoting a frontmatter template. Body
+# prose is deliberately not pinned: it is judgment, and pinning a word of it would turn every
+# improvement into a failure. What is pinned is the machine-read part.
+#
+# CR is stripped first, for the reason the authoring check gives: .gitattributes marks *.md as
+# `text`, so with core.autocrlf=true every checked-out .md in the working tree is CRLF and a
+# `$`-anchored pattern would never match past the trailing CR.
+fm_block() {
+  tr -d '\r' < "$1" 2>/dev/null \
+    | awk 'NR==1 { if ($0 != "---") exit; next } $0 == "---" { exit } { print }'
+}
+ing_bad=""
+INGSKILL="skills/ingest/SKILL.md"
+INGCMD="commands/ingest.md"
+if [[ ! -s "$PLUGIN/$INGSKILL" ]]; then
+  ing_bad="$ing_bad
+      $INGSKILL is absent or empty"
+else
+  ing_fm="$(fm_block "$PLUGIN/$INGSKILL")"
+  grep -qE '^name: ingest$' <<< "$ing_fm" || ing_bad="$ing_bad
+      $INGSKILL: no 'name: ingest' in frontmatter"
+  # A skill with no description is never triggered by anything the user says.
+  grep -qE '^description: .' <<< "$ing_fm" || ing_bad="$ing_bad
+      $INGSKILL: no non-empty 'description:' in frontmatter"
+fi
+if [[ ! -s "$PLUGIN/$INGCMD" ]]; then
+  ing_bad="$ing_bad
+      $INGCMD is absent or empty"
+else
+  ing_fm="$(fm_block "$PLUGIN/$INGCMD")"
+  grep -qE '^disable-model-invocation: true$' <<< "$ing_fm" || ing_bad="$ing_bad
+      $INGCMD: no 'disable-model-invocation: true' in frontmatter"
+  ing_at="$(grep -E '^allowed-tools:' <<< "$ing_fm")"
+  if [[ -z "$ing_at" ]]; then
+    ing_bad="$ing_bad
+      $INGCMD: no 'allowed-tools:' line in frontmatter"
+  else
+    # Word-bounded, so `Read` is not satisfied by `ReadFile` and `Grep` is not satisfied by a
+    # substring of something else.
+    for t in Bash Read Write Edit Glob Grep; do
+      grep -qE "(^|[^A-Za-z])$t([^A-Za-z]|\$)" <<< "$ing_at" || ing_bad="$ing_bad
+      $INGCMD: allowed-tools does not list $t"
+    done
+  fi
+fi
+if [[ -z "$ing_bad" ]]; then
+  pass "ingest: skill and command carry the frontmatter that makes them work"
+else
+  fail "ingest: skill and command carry the frontmatter that makes them work" "$ing_bad"
 fi
 
 # --- authoring reference: both worked exemplars survive an edit ---
