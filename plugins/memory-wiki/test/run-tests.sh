@@ -292,6 +292,113 @@ created:   ${seed3:-<no index.md>}"
 fi
 rm -rf "$IXPROJ" "$IXBARE"
 
+# --- the ingest ledger: wiki-log.sh writes it, wiki-ingest-plan.sh reads it back ---
+# One block for both scripts because they are one contract. wiki-log.sh is the only writer of
+# the `- Sources:` lines and wiki-ingest-plan.sh is the only reader of them, so a writer whose
+# format the reader cannot parse would sail through two separately-green blocks. The fixture's
+# log.md is written in exactly the shape wiki-log.sh appends, and the round-trip check below
+# closes the loop from the other end.
+#
+# fixtures/ingest-plan/memory carries an index.md, a README.md and an inbox/consumed/ that the
+# page list does not mention on purpose: without them the exclusion half of the contract would
+# be asserted against a wiki that has nothing to exclude.
+PLAN="$PLUGIN/bin/wiki-ingest-plan.sh"
+LOGSH="$PLUGIN/bin/wiki-log.sh"
+PLANFIX="$HERE/fixtures/ingest-plan/memory"
+
+plan_out="$(bash "$PLAN" "$PLANFIX" 2>&1)"
+plan_exp="$(cat "$HERE/expected/ingest-plan.txt" 2>/dev/null)"
+if [[ "$plan_out" == "$plan_exp" ]]; then
+  pass "plan: work order"
+else
+  fail "plan: work order" "$(diff <(echo "$plan_exp") <(echo "$plan_out") || true)"
+fi
+
+# The round trip, asserted from both ends on one temp copy — two pending before, none after —
+# so it cannot pass by the fixture having had nothing pending all along.
+#
+# "after" is measured in BYTES rather than captured with $(...). Command substitution strips
+# trailing newlines, so a script that emitted one stray newline would compare equal to "" and
+# this check would certify the exact bug it exists to catch: wiki-nudge.sh counts these lines,
+# and one blank line reads as a pending rollup named "".
+PLANTMP="$(mktemp -d)"
+cp -r "$PLANFIX" "$PLANTMP/memory"
+rt_want=$'2026-W35\n2026-W36'
+rt_before="$(bash "$PLAN" "$PLANTMP/memory" --pending-only 2>&1)"
+# A space after the comma, because the ingest skill is the caller and writes lists the way a
+# person would.
+rt_log="$(bash "$LOGSH" --wiki "$PLANTMP/memory/wiki" --op ingest --title 'Round trip' \
+  --date 2026-09-09 --sources '2026-W35, 2026-W36' 2>&1)"; rt_rc=$?
+rt_after="$(bash "$PLAN" "$PLANTMP/memory" --pending-only 2>&1 | wc -c | tr -d '[:space:]')"
+# The same emptied state read through the full report, where a section that has run dry is
+# rendered as (none) rather than dropped — the only place the suite reaches that branch.
+rt_none_want=$'## Pending sources (0)\n(none)'
+rt_none="$(bash "$PLAN" "$PLANTMP/memory" 2>&1)"
+if [[ $rt_rc -eq 0 && "$rt_before" == "$rt_want" && "$rt_after" == "0" \
+      && "$rt_none" == *"$rt_none_want"* ]]; then
+  pass "plan: logging a source clears it from pending"
+else
+  fail "plan: logging a source clears it from pending" "log rc=$rt_rc  $rt_log
+before: $rt_before
+after: $rt_after byte(s), want 0
+work order:
+$rt_none"
+fi
+rm -rf "$PLANTMP"
+
+# The writer's format line for line, the survival of the entry that was already there, and the
+# glob trap, in one run.
+#
+# Wiki page names are model-generated, so one of them here carries a literal `*`. It is passed
+# as a single quoted argument; a splitter that let the shell word-split the list unquoted would
+# then pathname-expand that word against the process's cwd — which is why this run happens from
+# a directory holding a file the pattern matches. `[[component_decoy]]` in log.md means the glob
+# fired. The `--updated` value is padded with spaces to pin the trimming at the same time.
+LOGTMP="$(mktemp -d)"
+cp -r "$PLANFIX" "$LOGTMP/memory"
+: > "$LOGTMP/component_decoy"
+log_run="$( cd "$LOGTMP" && bash "$LOGSH" --wiki "$LOGTMP/memory/wiki" --op ingest \
+  --title 'Star names and all' --date 2026-09-10 --sources '2026-W35' \
+  --created 'component_new,component_*' --updated '  failure_demo-crash  ' \
+  --inbox '2026-09-02-note.md' 2>&1 )"; log_rc=$?
+log_body="$(cat "$LOGTMP/memory/wiki/log.md" 2>/dev/null)"
+log_missing=""
+for needle in \
+  '## [2026-09-10] ingest | Star names and all' \
+  '- Sources: [[2026-W35]]' \
+  '- Pages created: [[component_new]], [[component_*]]' \
+  '- Pages updated: [[failure_demo-crash]]' \
+  '- Inbox consumed: 2026-09-02-note.md' \
+  '## [2026-09-01] ingest | Week 2026-W34' \
+  '- Sources: [[2026-W34]]'; do
+  [[ "$log_body" == *"$needle"* ]] || log_missing="$log_missing
+      $needle"
+done
+if [[ $log_rc -eq 0 && -z "$log_missing" ]]; then
+  pass "log: appends the ledger format, preserving earlier entries"
+else
+  fail "log: appends the ledger format, preserving earlier entries" "rc=$log_rc  $log_run
+not found in log.md:$log_missing"
+fi
+rm -rf "$LOGTMP"
+
+# A project that never scaffolded a wiki is an expected answer, not a script failure. Under
+# --pending-only it is not even an answer: wiki-nudge.sh would read the report's lines as
+# pending rollups. Bytes again, for the reason given above.
+NOWIKI="$(mktemp -d)"
+mkdir -p "$NOWIKI/memory"
+nw_out="$(bash "$PLAN" "$NOWIKI/memory" 2>&1)"; nw_rc=$?
+nw_bytes="$(bash "$PLAN" "$NOWIKI/memory" --pending-only 2>&1 | wc -c | tr -d '[:space:]')"
+if [[ $nw_rc -eq 0 && "$nw_out" == *"ERROR: no wiki for: $NOWIKI/memory"* \
+      && "$nw_out" == *"/memory-wiki:init"* && "$nw_bytes" == "0" ]]; then
+  pass "plan: missing wiki reports, exits 0, and stays silent under --pending-only"
+else
+  fail "plan: missing wiki reports, exits 0, and stays silent under --pending-only" "rc=$nw_rc
+$nw_out
+--pending-only: $nw_bytes byte(s), want 0"
+fi
+rm -rf "$NOWIKI"
+
 # --- PowerShell parity: the .ps1 must match the .sh byte for byte ---
 # The bash script's stdout is the specification; the twin exists so the agent side can
 # invoke the linter without going through an unreliable Bash layer on Windows.
@@ -344,6 +451,7 @@ missing=""
 for p in README.md skills/lint/SKILL.md commands/lint.md commands/init.md \
          bin/wiki-lint.sh bin/wiki-lint.ps1 bin/wiki-init.sh bin/wiki-lint-project.sh \
          bin/wiki-index.py bin/wiki-index.sh \
+         bin/wiki-log.sh bin/wiki-ingest-plan.sh \
          bin/_wiki-paths.sh assets/wiki-README.md; do
   [[ -f "$PLUGIN/$p" ]] || missing="$missing $p"
 done
