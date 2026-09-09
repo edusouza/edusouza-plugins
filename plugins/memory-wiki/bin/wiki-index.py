@@ -41,6 +41,14 @@ END = "<!-- END memory-wiki -->"
 # project shows a phantom diff on a file nobody edited.
 EMPTY = "(no pages yet — run /memory-wiki:ingest)\n"
 
+# What wiki-init.sh puts above the managed region, and what write_region puts there
+# when it has to create index.md itself — in a wiki scaffolded before index.md was
+# seeded, or one that never ran init. The two shapes have to match, because this is
+# a one-shot decision: the replace path never adds a heading afterwards, so an
+# index.md created without one keeps a bare marker block forever while every newly
+# scaffolded wiki gets a heading.
+INDEX_HEADING = "# Wiki index"
+
 # Machinery, not pages: never rendered, never counted.
 _SKIP = ("index", "log", "README")
 
@@ -259,6 +267,10 @@ def write_region(path, body):
     leftover and delete everything under it on the next run. If there is no such
     pair at all the block is appended — the region is never read as "BEGIN to end
     of file", which would delete everything below a stray marker.
+
+    One filename-specific rule: an `index.md` written from nothing also gets
+    INDEX_HEADING, so a generated index and a wiki-init.sh-scaffolded one are the
+    same file. See that constant for why it cannot be left to the caller.
     """
     path = os.path.abspath(path)
     parent = os.path.dirname(path)
@@ -316,7 +328,14 @@ def write_region(path, body):
             sep = nl
         else:
             sep = nl + nl
-        updated = text + sep + block
+        # An index.md written from nothing gets the heading wiki-init.sh seeds, so a
+        # generated one and a scaffolded one are byte-identical. Only when there is no
+        # existing content: a file that already has something above the markers keeps
+        # whatever its owner put there, and MEMORY.md never gets a heading from us.
+        head = ""
+        if not text and os.path.basename(path) == "index.md":
+            head = INDEX_HEADING + nl + nl
+        updated = text + sep + head + block
         action = "created" if original is None else "appended"
 
     # Not rewriting a shared file we are not changing is the cheapest possible
@@ -349,7 +368,13 @@ def main(argv=None):
         if arg == "--wiki" and i + 1 < len(argv):
             i += 1
             wiki_dir = argv[i]
-        elif arg == "--memory-md" and i + 1 < len(argv):
+        elif arg == "--memory-md":
+            # Loud, not silent: this is the flag that writes into the shared file, so a
+            # caller who passes it without a path has to learn that the pointer was
+            # never written rather than get a clean exit 0 and no stub.
+            if i + 1 >= len(argv):
+                print("ERROR: --memory-md needs a path", file=sys.stderr)
+                return 1
             i += 1
             memory_md = argv[i]
         elif arg == "--render-only":

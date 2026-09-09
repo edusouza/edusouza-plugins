@@ -111,6 +111,23 @@ else
   fail "paths: _wiki-paths.sh" "wiki_project_dir not defined"
 fi
 
+# Where a throwaway project's memory would live — echoed only when that dir is safe to
+# scaffold into and, far more importantly, safe to `rm -rf` afterwards.
+#
+# Neither half is theoretical. `mktemp -d` honours $TMPDIR, and wiki_resolve_main_root
+# redirects anything inside a *linked worktree* to the MAIN repo root. So a $TMPDIR
+# pointing anywhere inside this repo or a worktree of it resolves a throwaway project
+# onto the user's real project dir, and the cleanup at the end of the block then deletes
+# their entire memory. A `*/projects/*` shape check does not help: the live path matches
+# it exactly as well as a temp hash does. The two conditions that do discriminate are
+# that the dir is not this repo's own, and that it did not already exist.
+scratch_project_dir() {
+  local d
+  d="$(wiki_project_dir "$1" 2>/dev/null)"
+  [[ -z "$d" || "$d" == "$(wiki_project_dir "$REPO" 2>/dev/null)" || -e "$d" ]] && return 1
+  printf '%s' "$d"
+}
+
 # --- init: creates the scaffold, and is idempotent ---
 TMPPROJ="$(mktemp -d)"
 ( cd "$TMPPROJ" && git init -q . ) >/dev/null 2>&1
@@ -211,13 +228,19 @@ fi
 
 # Idempotence: the append path's separator logic is where a second run grows a stray blank
 # line or a whole second block. Checksum both files across a repeat run.
+#
+# The exit code is part of the assertion, not decoration. If the generator throws, nothing
+# is written, both files stay exactly as run 1 left them and the checksums match trivially
+# — a crashed generator would report PASS. This run is also the only exercise of the
+# replace path anywhere in the suite: the checks above it only ever hit create and append.
 sum1="$(sum_of "$IDXWIKI/index.md")|$(sum_of "$IDXMEM")"
-"$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$IDXWIKI" --memory-md "$IDXMEM" >/dev/null 2>&1
+"$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$IDXWIKI" --memory-md "$IDXMEM" >/dev/null 2>&1; idx_rc2=$?
 sum2="$(sum_of "$IDXWIKI/index.md")|$(sum_of "$IDXMEM")"
-if [[ -f "$IDXWIKI/index.md" && -f "$IDXMEM" && "$sum1" == "$sum2" ]]; then
+if [[ $idx_rc2 -eq 0 && -f "$IDXWIKI/index.md" && -f "$IDXMEM" && "$sum1" == "$sum2" ]]; then
   pass "index: re-running is byte-identical"
 else
-  fail "index: re-running is byte-identical" "run1: $sum1
+  fail "index: re-running is byte-identical" "rc=$idx_rc2
+run1: $sum1
 run2: $sum2"
 fi
 rm -rf "$IDXTMP"
@@ -226,22 +249,40 @@ rm -rf "$IDXTMP"
 # wiki-init.sh seeds index.md with the empty-wiki placeholder and wiki-index.py renders
 # that same placeholder when there are no pages. If the two ever drift, every newly
 # initialized wiki shows a phantom diff on its very first ingest, on a file nobody edited.
+#
+# Three shapes have to be one shape, because two of them are permanent once written: the
+# seeded file, the same file rewritten through the replace path, and an index.md the
+# generator creates from nothing in a wiki that never had one. The replace path never adds
+# a heading afterwards, so a wiki whose index.md was created headingless keeps it forever
+# while newly scaffolded wikis get one. Pinning only the first two lets that drift back in.
 IXPROJ="$(mktemp -d)"
 ( cd "$IXPROJ" && git init -q . ) >/dev/null 2>&1
-IXPDIR="$(wiki_project_dir "$IXPROJ")"
-mkdir -p "$IXPDIR/memory"
-bash "$PLUGIN/bin/wiki-init.sh" "$IXPROJ" >/dev/null 2>&1
-seed1="$(sum_of "$IXPDIR/memory/wiki/index.md")"
-"$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$IXPDIR/memory/wiki" >/dev/null 2>&1
-seed2="$(sum_of "$IXPDIR/memory/wiki/index.md")"
-if [[ -n "$seed1" && "$seed1" == "$seed2" ]]; then
-  pass "init: seeded index.md is what the generator would write"
+IXPDIR="$(scratch_project_dir "$IXPROJ")"
+IXBARE="$(mktemp -d)"
+if [[ -z "$IXPDIR" ]]; then
+  fail "init: seeded index.md is what the generator would write" \
+    "$IXPROJ resolves to $(wiki_project_dir "$IXPROJ"), which is this repo's own memory
+dir or already exists; refusing to scaffold into it or delete it. Check \$TMPDIR."
 else
-  fail "init: seeded index.md is what the generator would write" "seeded:    ${seed1:-<no index.md>}
-generated: ${seed2:-<no index.md>}"
+  mkdir -p "$IXPDIR/memory"
+  bash "$PLUGIN/bin/wiki-init.sh" "$IXPROJ" >/dev/null 2>&1
+  seed1="$(sum_of "$IXPDIR/memory/wiki/index.md")"
+  "$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$IXPDIR/memory/wiki" >/dev/null 2>&1; seed_rc=$?
+  seed2="$(sum_of "$IXPDIR/memory/wiki/index.md")"
+  "$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$IXBARE" >/dev/null 2>&1; bare_rc=$?
+  seed3="$(sum_of "$IXBARE/index.md")"
+  if [[ $seed_rc -eq 0 && $bare_rc -eq 0 && -n "$seed1" \
+        && "$seed1" == "$seed2" && "$seed1" == "$seed3" ]]; then
+    pass "init: seeded index.md is what the generator would write"
+  else
+    fail "init: seeded index.md is what the generator would write" "rc: seed=$seed_rc bare=$bare_rc
+seeded:    ${seed1:-<no index.md>}
+rewritten: ${seed2:-<no index.md>}
+created:   ${seed3:-<no index.md>}"
+  fi
+  rm -rf "$IXPDIR"
 fi
-rm -rf "$IXPROJ"
-[[ -n "$IXPDIR" && "$IXPDIR" == */projects/* ]] && rm -rf "$IXPDIR"
+rm -rf "$IXPROJ" "$IXBARE"
 
 # --- PowerShell parity: the .ps1 must match the .sh byte for byte ---
 # The bash script's stdout is the specification; the twin exists so the agent side can
