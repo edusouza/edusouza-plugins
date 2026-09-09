@@ -11,13 +11,30 @@ FAILED=0
 pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1"; echo "$2" | sed 's/^/      /'; FAILED=1; }
 
+# --- python runtime ---
+# As of 0.4.0, python backs wiki-index.py — a real runtime dependency, not just a
+# test-harness convenience for parsing JSON below. Resolve it once, in the order the
+# real interpreter wins on this machine: a WindowsApps `python3` shim can resolve
+# ahead of the real `python`, so `python` is tried first. Fail loudly rather than
+# let every check that needs it fail with a confusing "command not found" one by one.
+PYBIN=""
+if command -v python >/dev/null 2>&1; then
+  PYBIN="python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYBIN="python3"
+else
+  echo "FAIL: python runtime not found (tried: python, python3)"
+  echo "      memory-wiki 0.4.0+ requires python; install it and re-run."
+  exit 1
+fi
+
 # --- version parity: plugin.json vs marketplace.json ---
 # This repo carries two independent version fields per plugin and nothing validates
 # them, which is its single most recurring failure mode. Guard it from day one.
 PJ="$PLUGIN/.claude-plugin/plugin.json"
 MJ="$REPO/.claude-plugin/marketplace.json"
-PV="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$PJ" 2>&1)"
-MV="$(python -c "
+PV="$("$PYBIN" -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$PJ" 2>&1)"
+MV="$("$PYBIN" -c "
 import json,sys
 m=json.load(open(sys.argv[1]))
 e=[p for p in m['plugins'] if p['name']=='memory-wiki']
@@ -51,6 +68,18 @@ run_fixture readme
 run_fixture casing
 run_fixture schema --sources "$HERE/fixtures/schema/sources"
 run_fixture typed --sources "$HERE/fixtures/typed/sources" --concepts "$HERE/fixtures/typed/concepts"
+
+# --- wiki-index.py: render half, golden-tested against the same typed fixture ---
+# CR is stripped from both sides for the same reason the PowerShell parity check
+# strips it: the content under test is the render, not which host produced the
+# newline.
+idx_out="$("$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$HERE/fixtures/typed/wiki" --render-only 2>&1 | tr -d '\r')"
+idx_exp="$(cat "$HERE/expected/typed-index.txt" 2>/dev/null | tr -d '\r')"
+if [[ "$idx_out" == "$idx_exp" ]]; then
+  pass "index: render"
+else
+  fail "index: render" "$(diff <(echo "$idx_exp") <(echo "$idx_out") || true)"
+fi
 
 # --- path helpers ---
 # shellcheck source=/dev/null
