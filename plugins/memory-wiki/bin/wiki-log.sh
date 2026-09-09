@@ -96,11 +96,18 @@ INB="$(render_list "$INBOX" plain)"
 
 LOG="$WIKI/log.md"
 
+# Both writes below are checked, and neither is optional. There is no `set -e` here, so an
+# unchecked redirection that fails — log.md replaced by a directory, a read-only file, a full
+# disk — prints its error and falls straight through to the success message. This is the sole
+# writer of an append-only ledger, and its caller is Task 6's ingest skill, which moves inbox
+# captures into consumed/ on the strength of a successful log. A false success there loses the
+# capture with nothing left to show it ever existed.
+
 # The same header wiki-init.sh seeds a new wiki's log.md with. Repeated rather than shared,
 # because this has to work on a wiki scaffolded before this script existed, or one whose log.md
 # was removed by hand. Keep the two byte-identical.
 if [[ ! -f "$LOG" ]]; then
-  cat > "$LOG" <<'EOF'
+  cat > "$LOG" <<'EOF' || { echo "ERROR: cannot create $LOG" >&2; exit 1; }
 # Wiki Log
 
 Append-only chronological record. Format: `## [YYYY-MM-DD] operation | title`
@@ -109,21 +116,31 @@ Append-only chronological record. Format: `## [YYYY-MM-DD] operation | title`
 EOF
 fi
 
+# The entry is assembled in full, then written with a single redirection.
+#
+# Not a `{ ...; } >> "$LOG"` group, which would take its exit status from its LAST command —
+# and the last three lines here are conditional, so an entry with no inbox to report would hand
+# back non-zero and read as a failed write. One command means one status, covering the
+# redirection and the write alike.
+#
 # One leading blank line separates this entry from whatever precedes it. That is safe without
 # checking for a trailing newline first, because the only two writers of log.md are this block
 # and wiki-init.sh above, and both terminate every line they emit.
-{
-  printf '\n## [%s] %s | %s\n\n' "$DATE" "$OP" "$TITLE"
-  # Always emitted, even with nothing after the colon. This is the line the pending
-  # calculation reads, and an entry carrying no `- Sources:` line at all is indistinguishable
-  # from one whose sources were dropped on the way in.
-  printf '%s\n' "- Sources:${SRC:+ $SRC}"
-  # The other three are omitted when empty: unlike Sources they are a description of what the
-  # run did, and "created no pages" is better said by silence than by an empty bullet.
-  [[ -n "$CRE" ]] && printf '%s\n' "- Pages created: $CRE"
-  [[ -n "$UPD" ]] && printf '%s\n' "- Pages updated: $UPD"
-  [[ -n "$INB" ]] && printf '%s\n' "- Inbox consumed: $INB"
-} >> "$LOG"
+ENTRY=$'\n'"## [$DATE] $OP | $TITLE"$'\n\n'
+# Always emitted, even with nothing after the colon. This is the line the pending calculation
+# reads, and an entry carrying no `- Sources:` line at all is indistinguishable from one whose
+# sources were dropped on the way in.
+ENTRY+="- Sources:${SRC:+ $SRC}"$'\n'
+# The other three are omitted when empty: unlike Sources they are a description of what the run
+# did, and "created no pages" is better said by silence than by an empty bullet.
+[[ -n "$CRE" ]] && ENTRY+="- Pages created: $CRE"$'\n'
+[[ -n "$UPD" ]] && ENTRY+="- Pages updated: $UPD"$'\n'
+[[ -n "$INB" ]] && ENTRY+="- Inbox consumed: $INB"$'\n'
+
+printf '%s' "$ENTRY" >> "$LOG" || {
+  echo "ERROR: cannot append to $LOG — the entry was NOT recorded" >&2
+  exit 1
+}
 
 echo "logged: [$DATE] $OP | $TITLE"
 echo "  -> $LOG"

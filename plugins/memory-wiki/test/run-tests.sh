@@ -382,6 +382,37 @@ not found in log.md:$log_missing"
 fi
 rm -rf "$LOGTMP"
 
+# Both of the writer's redirections, because they fail independently: a directory where log.md
+# belongs never satisfies -f, so the run fails on the create; a read-only regular file does
+# satisfy it, so the run gets as far as the append and fails there. wiki-log.sh has no `set -e`,
+# and an unchecked redirection prints its error and falls straight through to "logged:" —
+# telling Task 6's ingest skill the entry landed immediately before it moves the inbox capture
+# into consumed/, which loses the capture with nothing left to show it existed.
+UNWR="$(mktemp -d)"
+mkdir -p "$UNWR/asdir/log.md" "$UNWR/asro"
+unwr_bad=""
+unwr1="$(bash "$LOGSH" --wiki "$UNWR/asdir" --op ingest --title unwritable --date 2026-09-14 \
+  --sources '2026-W35' 2>&1)"; unwr1_rc=$?
+[[ $unwr1_rc -eq 1 && "$unwr1" != *"logged:"* ]] || unwr_bad="$unwr_bad
+      create: rc=$unwr1_rc (want 1) $unwr1"
+printf '# Wiki Log\n' > "$UNWR/asro/log.md"
+chmod 444 "$UNWR/asro/log.md"
+# Assert the append half only where the platform honours the bit. Running as root, or on a
+# filesystem that ignores it, would make this a test of nothing rather than a failing one.
+if ! ( printf 'x\n' >> "$UNWR/asro/log.md" ) 2>/dev/null; then
+  unwr2="$(bash "$LOGSH" --wiki "$UNWR/asro" --op ingest --title unwritable --date 2026-09-14 \
+    --sources '2026-W35' 2>&1)"; unwr2_rc=$?
+  [[ $unwr2_rc -eq 1 && "$unwr2" != *"logged:"* ]] || unwr_bad="$unwr_bad
+      append: rc=$unwr2_rc (want 1) $unwr2"
+fi
+chmod 644 "$UNWR/asro/log.md" 2>/dev/null
+if [[ -z "$unwr_bad" ]]; then
+  pass "log: a failed write is reported as a failure"
+else
+  fail "log: a failed write is reported as a failure" "want rc=1 and no 'logged:' line:$unwr_bad"
+fi
+rm -rf "$UNWR"
+
 # A project that never scaffolded a wiki is an expected answer, not a script failure. Under
 # --pending-only it is not even an answer: wiki-nudge.sh would read the report's lines as
 # pending rollups. Bytes again, for the reason given above.
@@ -389,15 +420,41 @@ NOWIKI="$(mktemp -d)"
 mkdir -p "$NOWIKI/memory"
 nw_out="$(bash "$PLAN" "$NOWIKI/memory" 2>&1)"; nw_rc=$?
 nw_bytes="$(bash "$PLAN" "$NOWIKI/memory" --pending-only 2>&1 | wc -c | tr -d '[:space:]')"
+# ...and the report itself goes to stderr, behind that guard rather than instead of it, so
+# stdout stays reserved for the work order and no future caller can miscount a diagnostic.
+nw_stdout="$(bash "$PLAN" "$NOWIKI/memory" 2>/dev/null | wc -c | tr -d '[:space:]')"
 if [[ $nw_rc -eq 0 && "$nw_out" == *"ERROR: no wiki for: $NOWIKI/memory"* \
-      && "$nw_out" == *"/memory-wiki:init"* && "$nw_bytes" == "0" ]]; then
+      && "$nw_out" == *"/memory-wiki:init"* && "$nw_bytes" == "0" && "$nw_stdout" == "0" ]]; then
   pass "plan: missing wiki reports, exits 0, and stays silent under --pending-only"
 else
   fail "plan: missing wiki reports, exits 0, and stays silent under --pending-only" "rc=$nw_rc
 $nw_out
---pending-only: $nw_bytes byte(s), want 0"
+--pending-only: $nw_bytes byte(s), want 0
+report on stdout: $nw_stdout byte(s), want 0"
 fi
 rm -rf "$NOWIKI"
+
+# Every refused call must leave stdout empty too. wiki-nudge.sh counts the lines this script
+# puts on stdout, so anything there that is not a rollup name becomes a nag the user cannot
+# clear. One typo used to be enough: `--pending--only` was taken as MEMORY_DIR, the real path
+# discarded, and the resulting "no wiki" report read as two pending rollups named after the
+# error text. A second positional is refused for the same reason rather than silently winning.
+ref_bad=""
+for bogus in '--pending--only' '--nope'; do
+  b_out="$(bash "$PLAN" "$PLANFIX" "$bogus" 2>/dev/null | wc -c | tr -d '[:space:]')"
+  b_err="$(bash "$PLAN" "$PLANFIX" "$bogus" 2>&1 >/dev/null)"; b_rc=$?
+  [[ "$b_out" == "0" && $b_rc -eq 0 && "$b_err" == *"unrecognized argument"* ]] \
+    || ref_bad="$ref_bad
+      $bogus: stdout=$b_out byte(s) rc=$b_rc stderr=$b_err"
+done
+two_out="$(bash "$PLAN" "$PLANFIX" "$PLANFIX" 2>/dev/null | wc -c | tr -d '[:space:]')"
+[[ "$two_out" == "0" ]] || ref_bad="$ref_bad
+      second positional: stdout=$two_out byte(s), want 0"
+if [[ -z "$ref_bad" ]]; then
+  pass "plan: a refused argument leaves stdout empty"
+else
+  fail "plan: a refused argument leaves stdout empty" "want stdout=0 rc=0 and a stderr complaint:$ref_bad"
+fi
 
 # --- PowerShell parity: the .ps1 must match the .sh byte for byte ---
 # The bash script's stdout is the specification; the twin exists so the agent side can

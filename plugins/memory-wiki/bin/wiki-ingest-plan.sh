@@ -32,13 +32,30 @@ DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin}"
 # shellcheck source=_wiki-paths.sh
 . "$DIR/_wiki-paths.sh"
 
-MEM=""; PENDING_ONLY=0
+MEM=""; PENDING_ONLY=0; BAD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pending-only) PENDING_ONLY=1; shift ;;
-    *)              MEM="$1";       shift ;;
+    # Anything else flag-shaped, and any second positional, is a caller bug — never a memory
+    # dir. Accepting it as one is trap 2 through a different door: `--pending--only` (one typo)
+    # used to discard the real path, take the typo as the memory dir, find no wiki there and
+    # print two lines of report. wiki-nudge.sh counts the lines this script puts on stdout, so
+    # a single typo in that hook's invocation nags forever about two rollups named after the
+    # error text. Same reasoning as wiki-log.sh's unknown-argument rejection, and it lands on
+    # the session-start path, which is the one the user cannot get out of.
+    --*) BAD="${BAD:+$BAD }$1"; shift ;;
+    *)
+      if [[ -n "$MEM" ]]; then BAD="${BAD:+$BAD }$1"; else MEM="$1"; fi
+      shift ;;
   esac
 done
+if [[ -n "$BAD" ]]; then
+  # Still exit 0 — this is a report command, and that contract holds on every path — but with
+  # nothing whatsoever on stdout for a line counter to find.
+  echo "ERROR: unrecognized argument(s): $BAD" >&2
+  echo "  usage: wiki-ingest-plan.sh [MEMORY_DIR] [--pending-only]" >&2
+  exit 0
+fi
 # Worktree-aware, so a session running inside a linked worktree reads the main repo's memory
 # rather than scaffolding a second one of its own.
 [[ -z "$MEM" ]] && MEM="$(wiki_project_dir "$PWD")/memory"
@@ -48,9 +65,12 @@ if [[ ! -d "$WIKI" ]]; then
   # Exit 0: a project that never scaffolded a wiki is an expected answer, not a script failure.
   # Silent under --pending-only, because wiki-nudge.sh counts the lines printed there and would
   # read this report as a list of pending rollups.
+  #
+  # On stderr even when it is printed, as defence in depth behind that guard: stdout carries
+  # the work order and nothing else, so no future caller can miscount a diagnostic as content.
   if (( PENDING_ONLY == 0 )); then
-    echo "ERROR: no wiki for: $MEM"
-    echo "  Run /memory-wiki:init to scaffold one."
+    echo "ERROR: no wiki for: $MEM" >&2
+    echo "  Run /memory-wiki:init to scaffold one." >&2
   fi
   exit 0
 fi
