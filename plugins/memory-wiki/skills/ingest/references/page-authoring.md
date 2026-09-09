@@ -85,9 +85,13 @@ link silently and turns the page into an orphan on the next audit.
 
 - **A decision is not a page.** It goes in a dated entry under `## Decisions` on the relevant
   `component_` page, or on the `project_` page when it is repo-wide.
-- **An open thread is not a page.** Open threads are transient by definition; a page for one is
-  stale within a week and nothing prunes it. Reporting them is `lint`'s job, not a page's. Do not
-  create `thread_`, `todo_`, `question_`, or `decision_` pages.
+- **An open thread is not a page, because the rollup already carries it.** Every weekly rollup ends
+  in an `## Open threads` section, and the most recent rollup is injected at session start — so an
+  unfinished thread is in front of you next session whether or not anyone wrote it down again.
+  Copying it into a page buys nothing and costs the one thing a page cannot recover from: it goes
+  stale within the week, nothing prunes it, and nothing in this plugin tracks open threads, so no
+  audit will ever tell you it has gone stale. Do not create `thread_`, `todo_`, `question_`, or
+  `decision_` pages.
 - **Episodic material is not a page.** Anything whose natural title is a date or a session belongs
   to the rollups, which already hold it and are already citable.
 
@@ -384,16 +388,16 @@ Owns this project's memory: Tier 1 session notes, Tier 2 weekly rollups under
 - **2026-W27 — a rollup is structurally validated before any source is archived.** The gate
   requires exit 0, the absence of known error sentinels, and a `# Week` header. It replaced a
   non-emptiness check, under which a run that printed a context-overflow error to stdout and
-  still exited 0 was accepted as a valid rollup — and its raw transcripts deleted. A failed
-  week now leaves its sources intact and retries. [[2026-W27]]
+  still exited 0 was accepted as a valid rollup, and the archive-and-delete step then ran on
+  its sources. A failed week now leaves its sources intact and retries. [[2026-W27]]
 - **2026-W27 — raw transcripts are budgeted into the prompt, never dumped into it.** 20 KB of
   head plus 10 KB of tail per file, 120 KB per week. Chosen over dropping raw transcripts
   entirely, because the curated notes are the primary signal and are always passed in full
   while the raw material is only corroboration. [[2026-W27]]
 - **2026-W27 — `MEMORY.md` is written per-writer, inside delimited regions.** Tier 3 rewrites
-  only what lies between its own `BEGIN`/`END` markers, because a separate global auto-memory
-  index owns other content in the same file and a wholesale overwrite erased it.
-  [[2026-W27]]
+  only what lies between its own `BEGIN`/`END` markers. The wholesale overwrite it replaced
+  risked erasing the separate global auto-memory index that owns other content in the same
+  file; it was scoped before it ever did. [[2026-W27]]
 
 ## Failure modes
 
