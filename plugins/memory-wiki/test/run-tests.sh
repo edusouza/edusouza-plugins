@@ -118,7 +118,8 @@ MEMD="$(wiki_project_dir "$TMPPROJ")/memory"
 mkdir -p "$MEMD"
 out1="$(bash "$PLUGIN/bin/wiki-init.sh" "$TMPPROJ" 2>&1)"
 out2="$(bash "$PLUGIN/bin/wiki-init.sh" "$TMPPROJ" 2>&1)"
-if [[ -f "$MEMD/wiki/log.md" && -f "$MEMD/wiki/README.md" && -d "$MEMD/wiki/inbox" ]] \
+if [[ -f "$MEMD/wiki/log.md" && -f "$MEMD/wiki/README.md" && -f "$MEMD/wiki/index.md" \
+      && -d "$MEMD/wiki/inbox" ]] \
    && grep -q 'already initialized' <<< "$out2"; then
   pass "init: scaffolds and is idempotent"
 else
@@ -136,6 +137,111 @@ else
 $out3"
 fi
 rm -rf "$TMPPROJ" "$NOMEM" "$(wiki_project_dir "$TMPPROJ")"
+
+# --- index: the write half ---
+# Every check below runs on a `cp -r` copy of fixtures/typed, never on the fixture itself:
+# the write path creates index.md, and expected/typed.txt pins that fixture at
+# "index region : 0 B". Writing in place would break the render golden.
+IDXBEGIN='<!-- BEGIN memory-wiki (managed; do not edit by hand) -->'
+IDXTMP="$(mktemp -d)"
+cp -r "$HERE/fixtures/typed" "$IDXTMP/typed"
+IDXWIKI="$IDXTMP/typed/wiki"
+IDXMEM="$IDXTMP/MEMORY.md"
+
+# A realistic shared MEMORY.md: a line the user wrote by hand, then claude-memory's own
+# managed region. Written with CRLF because the real file on Windows is CRLF and has to
+# stay that way — silently rewriting a shared file's endings is a whole-file diff that
+# belongs to nobody.
+printf '%s\r\n' \
+  '# Memory Index' \
+  '' \
+  '- [User note](note.md) — a line memory-wiki must never touch' \
+  '' \
+  '<!-- BEGIN claude-memory tier-3 (managed; do not edit by hand) -->' \
+  '- [Some concept](concept_some.md) — belongs to claude-memory' \
+  '<!-- END claude-memory tier-3 -->' > "$IDXMEM"
+
+idx_w="$("$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$IDXWIKI" --memory-md "$IDXMEM" 2>&1)"; idx_rc=$?
+
+# Extracted exactly the way wiki-lint.sh measures the injection budget, so the writer and
+# the linter agree on what "the region" is. CR is stripped on both sides for the same
+# reason the render check strips it: the content under test is the render, not the newline.
+extract_region() {
+  awk '/<!-- BEGIN memory-wiki/{f=1;next} /<!-- END memory-wiki/{f=0} f' "$1" 2>/dev/null | tr -d '\r'
+}
+# Reads on stdin so the filename never lands in the checksum. Silent on a missing file:
+# the checks below test for the file separately and report that themselves.
+sum_of() { [[ -f "$1" ]] && cksum < "$1"; }
+got_region="$(extract_region "$IDXWIKI/index.md")"
+want_region="$(cat "$HERE/expected/typed-index.txt" 2>/dev/null | tr -d '\r')"
+if [[ $idx_rc -eq 0 && -n "$got_region" && "$got_region" == "$want_region" ]]; then
+  pass "index: writes the region into index.md"
+else
+  fail "index: writes the region into index.md" "rc=$idx_rc  $idx_w
+$(diff <(echo "$want_region") <(echo "$got_region") || true)"
+fi
+
+idx_mem="$(cat "$IDXMEM" 2>/dev/null)"
+mem_ok=1
+for needle in \
+  '- [User note](note.md) — a line memory-wiki must never touch' \
+  '<!-- BEGIN claude-memory tier-3 (managed; do not edit by hand) -->' \
+  '- [Some concept](concept_some.md) — belongs to claude-memory' \
+  '<!-- END claude-memory tier-3 -->' \
+  "$IDXBEGIN"; do
+  [[ "$idx_mem" == *"$needle"* ]] || mem_ok=0
+done
+# ...and what we added is a pointer, not a second copy of the index (D-a): rendering the
+# region into both files would spend the injection budget twice.
+idx_stub="$(extract_region "$IDXMEM")"
+[[ -n "$idx_stub" && "$idx_stub" == *"wiki/index.md"* && "$idx_stub" != *"## Symptoms"* ]] || mem_ok=0
+if [[ $mem_ok -eq 1 ]]; then
+  pass "index: MEMORY.md keeps every foreign line and gains our stub"
+else
+  fail "index: MEMORY.md keeps every foreign line and gains our stub" "$idx_mem"
+fi
+
+# Not merely "a CR survived somewhere": the block we wrote must have adopted the file's own
+# convention too, or the next reader gets a file with mixed endings.
+if [[ "$idx_mem" == *$'\r'* && "$idx_mem" == *"$IDXBEGIN"$'\r'* ]]; then
+  pass "index: MEMORY.md keeps its CRLF line endings"
+else
+  fail "index: MEMORY.md keeps its CRLF line endings" "no CR-terminated memory-wiki marker in $IDXMEM"
+fi
+
+# Idempotence: the append path's separator logic is where a second run grows a stray blank
+# line or a whole second block. Checksum both files across a repeat run.
+sum1="$(sum_of "$IDXWIKI/index.md")|$(sum_of "$IDXMEM")"
+"$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$IDXWIKI" --memory-md "$IDXMEM" >/dev/null 2>&1
+sum2="$(sum_of "$IDXWIKI/index.md")|$(sum_of "$IDXMEM")"
+if [[ -f "$IDXWIKI/index.md" && -f "$IDXMEM" && "$sum1" == "$sum2" ]]; then
+  pass "index: re-running is byte-identical"
+else
+  fail "index: re-running is byte-identical" "run1: $sum1
+run2: $sum2"
+fi
+rm -rf "$IDXTMP"
+
+# --- init: the seed and the generator must agree on an empty wiki ---
+# wiki-init.sh seeds index.md with the empty-wiki placeholder and wiki-index.py renders
+# that same placeholder when there are no pages. If the two ever drift, every newly
+# initialized wiki shows a phantom diff on its very first ingest, on a file nobody edited.
+IXPROJ="$(mktemp -d)"
+( cd "$IXPROJ" && git init -q . ) >/dev/null 2>&1
+IXPDIR="$(wiki_project_dir "$IXPROJ")"
+mkdir -p "$IXPDIR/memory"
+bash "$PLUGIN/bin/wiki-init.sh" "$IXPROJ" >/dev/null 2>&1
+seed1="$(sum_of "$IXPDIR/memory/wiki/index.md")"
+"$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$IXPDIR/memory/wiki" >/dev/null 2>&1
+seed2="$(sum_of "$IXPDIR/memory/wiki/index.md")"
+if [[ -n "$seed1" && "$seed1" == "$seed2" ]]; then
+  pass "init: seeded index.md is what the generator would write"
+else
+  fail "init: seeded index.md is what the generator would write" "seeded:    ${seed1:-<no index.md>}
+generated: ${seed2:-<no index.md>}"
+fi
+rm -rf "$IXPROJ"
+[[ -n "$IXPDIR" && "$IXPDIR" == */projects/* ]] && rm -rf "$IXPDIR"
 
 # --- PowerShell parity: the .ps1 must match the .sh byte for byte ---
 # The bash script's stdout is the specification; the twin exists so the agent side can
@@ -188,6 +294,7 @@ fi
 missing=""
 for p in README.md skills/lint/SKILL.md commands/lint.md commands/init.md \
          bin/wiki-lint.sh bin/wiki-lint.ps1 bin/wiki-init.sh bin/wiki-lint-project.sh \
+         bin/wiki-index.py bin/wiki-index.sh \
          bin/_wiki-paths.sh assets/wiki-README.md; do
   [[ -f "$PLUGIN/$p" ]] || missing="$missing $p"
 done

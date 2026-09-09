@@ -51,6 +51,19 @@ Append-only chronological record. Format: `## [YYYY-MM-DD] operation | title`
 ---
 EOF
 
+# The body between the markers must stay byte-identical to what wiki-index.py renders for
+# an empty wiki (its EMPTY constant), because the generator rewrites this exact region on
+# every ingest. If the seed and the render ever drift, the first ingest in every newly
+# initialized project reports a diff on a file nobody edited, and the user learns to
+# ignore diffs on index.md. test/run-tests.sh pins the two together.
+cat > "$WIKI/index.md" <<'EOF'
+# Wiki index
+
+<!-- BEGIN memory-wiki (managed; do not edit by hand) -->
+(no pages yet — run /memory-wiki:ingest)
+<!-- END memory-wiki -->
+EOF
+
 echo "wiki initialized for: $TARGET"
 echo "  -> $WIKI"
 echo "  Next: run /memory-wiki:lint to audit what is already there."
