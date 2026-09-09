@@ -140,12 +140,12 @@ fi
 if [[ -n "$ATLAS" && -d "$ATLAS" ]]; then
   for f in "$ATLAS"/*.md; do [[ -e "$f" ]] && basename "$f" .md >> "$TMP/known_atlas"; done
 fi
-# index.md, log.md and README.md are real files and are legitimate link targets even
-# though they are excluded from the page count. README.md must be listed here now that
-# is_structural() keeps it out of the page set: it used to resolve only because it was a
-# page, and the PowerShell twin adds every structural file it finds, so dropping it here
-# would make `[[README]]` report broken on the bash side alone.
-for s in index log README; do [[ -f "$WIKI/$s.md" ]] && echo "$s" >> "$TMP/known"; done
+# Every structural file that exists is a real file and a legitimate link target, even though
+# it is excluded from the page count. This must stay the same set the PowerShell twin adds —
+# it derives the list from $structural, so any name missing here reports broken on the bash
+# side alone. MEMORY was such a name, and in a pre-wiki memory dir — Phase 1's entry point,
+# where MEMORY.md always exists — it is the likeliest of the four to be linked.
+for s in index log MEMORY README; do [[ -f "$WIKI/$s.md" ]] && echo "$s" >> "$TMP/known"; done
 sort -u -o "$TMP/known" "$TMP/known"
 sort -u -o "$TMP/known_atlas" "$TMP/known_atlas"
 
@@ -153,6 +153,12 @@ sort -u -o "$TMP/known_atlas" "$TMP/known_atlas"
 : > "$TMP/broken"
 while IFS='|' read -r from to; do
   [[ -n "$to" ]] || continue
+  # README.md is the only structural file whose links are not edges. It is prose *about* the
+  # link syntax, and its [[...]] are illustrations that cannot resolve by construction — so
+  # every freshly scaffolded wiki would report them as broken links its owner cannot fix.
+  # index.md and log.md are the opposite: they are real indexes of the graph, and one pointing
+  # at a page that no longer exists is a genuine finding. Only README is exempt.
+  [[ "$from" == "README" ]] && continue
   if [[ "$to" == atlas/* ]]; then
     if grep -qxF "${to#atlas/}" "$TMP/known_atlas"; then
       continue

@@ -47,6 +47,7 @@ run_fixture broken
 run_fixture atlas --sources "$HERE/fixtures/atlas/sources" --atlas "$HERE/fixtures/atlas/atlas"
 run_fixture orphans
 run_fixture no-frontmatter
+run_fixture readme
 run_fixture schema --sources "$HERE/fixtures/schema/sources"
 run_fixture typed --sources "$HERE/fixtures/typed/sources" --concepts "$HERE/fixtures/typed/concepts"
 
@@ -135,6 +136,10 @@ if command -v pwsh >/dev/null 2>&1; then
   parity orphans
   parity no-frontmatter
   parity atlas "$HERE/fixtures/atlas/sources" "$HERE/fixtures/atlas/atlas"
+  # readme is the parity assertion that matters most here: the divergence it pins was between
+  # the twins, not against a golden — bash listed its structural link targets explicitly while
+  # the twin derived them from $structural.
+  parity readme
   parity schema "$HERE/fixtures/schema/sources"
   # parity has no --concepts slot, so both sides run without one and both report the same two
   # broken links to [[concept_root-heuristic]]. That is still a valid parity assertion — the

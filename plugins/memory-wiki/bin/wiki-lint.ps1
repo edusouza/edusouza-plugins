@@ -125,6 +125,9 @@ if ($Atlas -and (Test-Path $Atlas)) {
 $broken = @()
 foreach ($l in $links) {
   $from = $l[0]; $to = $l[1]
+  # README's links are illustrations of the syntax, not edges; index and log keep their
+  # classification. See the matching comment in wiki-lint.sh.
+  if ($from -ceq 'README') { continue }
   if ($to -like 'atlas/*') {
     if ($knownAtlas.Contains($to.Substring(6))) { continue }
   } elseif ($known.Contains($to)) {

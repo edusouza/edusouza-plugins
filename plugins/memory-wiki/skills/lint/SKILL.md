@@ -16,15 +16,21 @@ main repo, and getting it wrong points the audit at the wrong project.
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/bin/wiki-lint.sh" "<memdir>/wiki" \
   --sources "<memdir>/episodic/weekly" \
-  --atlas "$HOME/.claude/memory-wiki"
+  --atlas "$HOME/.claude/memory-wiki" \
+  --concepts "<memdir>"
 ```
+
+**`--concepts` is not optional in practice.** It makes claude-memory's flat root `concept_*.md`
+files resolvable as link targets without counting them as pages, so they never appear as orphans of
+a wiki they are not part of. Omit it and every page citing a concept reports as a broken link —
+which is most of them.
 
 If `<memdir>/wiki` does not exist yet, run the script against `<memdir>` itself. The flat
 `concept_*.md` files there are a wiki with no edges, and auditing them is the whole point of this
 phase — a pre-wiki memory dir is the normal case, not an error.
 
 On Windows, or wherever shelling out proves unreliable, `bin/wiki-lint.ps1` produces byte-identical
-output (`-WikiDir` / `-Sources` / `-Atlas`).
+output (`-WikiDir` / `-Sources` / `-Atlas` / `-Concepts`).
 
 Relay the counters verbatim. Do not re-derive them by hand and do not fix anything.
 
