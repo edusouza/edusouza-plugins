@@ -23,6 +23,13 @@ Three tests. **All three must pass.**
    the root `concept_*.md` files alongside them. "Covered" includes covered badly: a thin page on
    the subject means you update that page, not that you write a better one next to it.
 
+   "Covered" means covered *as the thing a reader would search for*. A root `concept_*.md`
+   covering the **what to do** half does **not** make a failure covered: a concept is found by
+   browsing `MEMORY.md`, a failure page is found by pasting the error, and those are different
+   readers on different days. If the material has a symptom you could recognise on sight, an
+   existing concept is a reason to **link** it, not a reason to skip the page — see §2's second
+   absolute rule, which governs. Test 3 excludes a duplicate *page*, not a duplicate *subject*.
+
 ### Prefer updating an existing page over creating a new one
 
 This is the single most commonly skipped rule in this whole file. When new material touches
@@ -41,9 +48,25 @@ pages start showing up as orphans.
 Updates to existing pages are not capped and never were; the cap exists to stop a large backlog of
 un-ingested rollups turning into a wall of thin pages in a single pass.
 
-If more than 8 candidates pass all three tests, take the 8 with the strongest recurrence evidence
-and leave the rest. Nothing is lost: the rollups are immutable, and the next run reads the same
-material with the same tests.
+If more than 8 candidates pass all three tests, spend the cap in this order, and rank by
+recurrence evidence only *within* each step:
+
+1. The `project_` page, if the wiki has none. Exactly one, and it is not optional — every
+   `component_` page's `part_of:` needs it.
+2. Every `failure_` candidate with a symptom a reader could recognise on sight. A `failure_` page
+   is the only type reachable by the symptom index, which is the one query anyone actually runs. A
+   `component_` or `tech_` page left for next run is still reachable by name from the Map; a
+   `failure_` left for next run is reachable by nothing.
+3. The `component_` pages needed to home those failures — one per failure with no home yet, and no
+   more. A failure that belongs to the platform is homed on the `tech_` page instead.
+4. Whatever slots remain: the strongest-recurrence `component_` and `tech_` candidates.
+
+On a first ingest this will feel wrong, because the scaffolding is what makes a wiki look
+finished. It is not what makes it useful. A wiki whose first run holds every component and none of
+its recurring failures has inverted its own priorities.
+
+Nothing is lost, whatever the run leaves out: the rollups are immutable, and the next run reads the
+same material with the same tests.
 
 **Zero new pages is a correct outcome.** A quiet week produces no pages, and a run that creates
 none has still done its job if it updated `last_accessed:` and `sources:` where the week touched
@@ -177,6 +200,21 @@ describe it afterwards:
 - `symptom: "the hook was cancelled"` — useless. Nobody types that, and it appears nowhere in any
   output.
 
+**When the defect produces no output at all**, there is nothing to quote and the rule above does
+not apply. Quote instead the shortest description of the observable wrong state, and prefer the
+words the person who hit it actually used — from the rollup — over words you compose now: those
+are the words the next person will use too. Mark it so the reader knows there is no string to
+paste: `symptom: "(no error) plugin loads at its old version after a bump"`. In the body,
+`## Symptom` then describes the state in prose and **does not** open a fenced block: a fence
+asserts terminal output, and asserting output that does not exist sends the next reader hunting a
+log line that was never printed. If you cannot write even the wrong-state phrase, the material is
+a `## Decisions` entry, not a `failure_` page.
+
+A symptom that is verbatim but generic — a string the tool prints in many unrelated situations —
+costs the index a false match on every unrelated hit. Keep the quoted string first so it still
+matches a paste, then append the discriminator that makes it *this* defect:
+`symptom: "Prompt is too long — written into a weekly rollup as its whole body"`.
+
 Keep it to one line. Trim only the parts that could never match twice — absolute home paths,
 process ids, timestamps, hashes — and keep the shape where you trim: `Cannot open /home/<user>/…`
 still matches on the half that is stable.
@@ -193,8 +231,8 @@ conventions were in use at once and there was no schema to arbitrate between the
 - **Source citations use the rollup filename**: `[[2026-W31]]` for `episodic/weekly/2026-W31.md`.
 - **Root `concept_*.md` links resolve.** `lint` is passed `--concepts` pointing at the memory-dir
   root, so `[[concept_windows_filesystem_tooling]]` is a live link even though the file lives outside
-  `wiki/`. Link concepts freely — and link them rather than restating them, because the concept
-  file is maintained elsewhere and a copy here will go stale silently.
+  `wiki/`. Link concepts freely — see §5 for how much of one you may restate before the link
+  should be carrying it instead.
 - **`[[atlas/<page>]]` is a valid form with nothing behind it yet.** The cross-project atlas
   arrives in a later phase. Until it exists, every such link is a broken link: do not write one,
   and do not invent atlas pages to point at.
@@ -217,6 +255,13 @@ for later:
 
 This is the second most commonly skipped rule, after preferring an update.
 
+`lint --concepts` registers **every** `*.md` at the memory-dir root as a link target, not only
+`concept_`-prefixed ones — `claude-memory`'s flat auto-memory notes are linkable, and should be
+linked when a page's claim is about one of them. And the `project_` page's inbound edge is each
+component's `part_of:` line: `lint` scans the whole file for `[[…]]`, frontmatter included. That is
+why the list above prescribes no inbound link for `project_` — and why a `project_` page whose run
+creates no component will report as an orphan.
+
 ---
 
 ## 5. Body shape
@@ -229,6 +274,7 @@ is immutable and already citable.
 **`failure_` — four sections, in this order, always:**
 
 1. `## Symptom` — the literal output, in a fenced block. Verbatim. Not paraphrased, not tidied.
+   Exception: the no-output case in §3 — there, prose, no fence.
 2. `## Cause` — the mechanism, one paragraph. What the machine actually did, at the level of "this
    string is expanded before the shell starts", never "there was a bug in the resolver".
 3. `## Fix` — concrete. The change that resolved it, specific enough to apply again without
@@ -256,6 +302,16 @@ is immutable and already citable.
 - Environment: OS, shells, runtimes, and the local quirks that bite.
 - `## Standing threads` — the questions that keep coming back, not this week's TODO list.
 
+### Restating a linked concept is bounded
+
+**Restating a linked concept is bounded, and the bound is countable: one sentence per page — the
+observation, never the reasoning, never the "how to apply".** A concept file is maintained by
+`claude-memory`; a copy here is maintained by nothing, so the copy is what a reader will be reading
+two months after the concept was corrected. If the sentence you are about to write is the concept's
+*second* sentence, delete it and let the link carry it. This binds `project_` bullets and
+`## Generalisation` alike: a `## Generalisation` of three sentences each ending in a different
+`[[concept_…]]` is three restatements, not one generalisation.
+
 ---
 
 ## 6. Redaction
@@ -281,7 +337,8 @@ are held to exactly the same bar as Tier 3:
 - [ ] `description:` is a sentence somebody would search for.
 - [ ] `sources:` cites every rollup the page draws on, including the ones added by this run.
 - [ ] Every `[[link]]` names a real file: a page in the wiki, a rollup in `episodic/weekly/`, or a
-      root `concept_*.md`. No atlas links.
+      root `.md` note — `concept_*.md` or one of `claude-memory`'s flat auto-memory notes. No atlas
+      links.
 - [ ] Something links *to* this page.
 - [ ] No names, no secrets.
 - [ ] Body is 2–3 KB and holds one subject.
