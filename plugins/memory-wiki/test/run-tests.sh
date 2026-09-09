@@ -131,17 +131,25 @@ scratch_project_dir() {
 # --- init: creates the scaffold, and is idempotent ---
 TMPPROJ="$(mktemp -d)"
 ( cd "$TMPPROJ" && git init -q . ) >/dev/null 2>&1
-MEMD="$(wiki_project_dir "$TMPPROJ")/memory"
-mkdir -p "$MEMD"
-out1="$(bash "$PLUGIN/bin/wiki-init.sh" "$TMPPROJ" 2>&1)"
-out2="$(bash "$PLUGIN/bin/wiki-init.sh" "$TMPPROJ" 2>&1)"
-if [[ -f "$MEMD/wiki/log.md" && -f "$MEMD/wiki/README.md" && -f "$MEMD/wiki/index.md" \
-      && -d "$MEMD/wiki/inbox" ]] \
-   && grep -q 'already initialized' <<< "$out2"; then
-  pass "init: scaffolds and is idempotent"
+TMPPDIR="$(scratch_project_dir "$TMPPROJ")"
+if [[ -z "$TMPPDIR" ]]; then
+  fail "init: scaffolds and is idempotent" \
+    "$TMPPROJ resolves to $(wiki_project_dir "$TMPPROJ"), which is this repo's own memory
+dir or already exists; refusing to scaffold into it or delete it. Check \$TMPDIR."
 else
-  fail "init: scaffolds and is idempotent" "run1: $out1
+  MEMD="$TMPPDIR/memory"
+  mkdir -p "$MEMD"
+  out1="$(bash "$PLUGIN/bin/wiki-init.sh" "$TMPPROJ" 2>&1)"
+  out2="$(bash "$PLUGIN/bin/wiki-init.sh" "$TMPPROJ" 2>&1)"
+  if [[ -f "$MEMD/wiki/log.md" && -f "$MEMD/wiki/README.md" && -f "$MEMD/wiki/index.md" \
+        && -d "$MEMD/wiki/inbox" ]] \
+     && grep -q 'already initialized' <<< "$out2"; then
+    pass "init: scaffolds and is idempotent"
+  else
+    fail "init: scaffolds and is idempotent" "run1: $out1
 run2: $out2"
+  fi
+  rm -rf "$TMPPDIR"
 fi
 # Refuses to scaffold where claude-memory was never initialized, rather than creating
 # a stray memory dir of its own.
@@ -153,7 +161,7 @@ else
   fail "init: refuses a project with no memory dir" "rc=$rc3
 $out3"
 fi
-rm -rf "$TMPPROJ" "$NOMEM" "$(wiki_project_dir "$TMPPROJ")"
+rm -rf "$TMPPROJ" "$NOMEM"
 
 # --- index: the write half ---
 # Every check below runs on a `cp -r` copy of fixtures/typed, never on the fixture itself:
