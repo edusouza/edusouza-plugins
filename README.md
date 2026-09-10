@@ -21,7 +21,7 @@ Update later with `/plugin marketplace update edusouza-plugins`.
 | [**context-docs**](plugins/context-docs) | Generate modular context-engineering docs under `docs/context/` that AI agents lazy-load on demand — architecture, standards, patterns, decisions — for any project. |
 | [**design-to-ui**](plugins/design-to-ui) | Turn a design into UI components via atomic design. Source-agnostic (Stitch, Claude Design handoff/HTML, image) and framework-agnostic (React, Vue, Svelte, Angular, Solid). |
 | [**llm-wiki**](plugins/llm-wiki) | Karpathy's LLM-Wiki pattern: `bootstrap` a `sources/`/`inbox/`/`wiki/` knowledge base, `ingest` curated sources into cross-linked pages, `process-inbox` to triage fleeting captures, `query` it, and `lint` it for drift. |
-| [**memory-wiki**](plugins/memory-wiki) | Turns `claude-memory`'s flat Tier-3 concepts into a cross-linked, searchable wiki. `lint` audits an existing memory dir for broken wikilinks, orphan pages, and missing frontmatter; `init` scaffolds the wiki layer. Reads what `claude-memory` writes and never modifies it. |
+| [**memory-wiki**](plugins/memory-wiki) | Turns `claude-memory`'s weekly rollups and flat Tier-3 concepts into a cross-linked, searchable wiki. `init` scaffolds the wiki layer; `ingest` distils the un-ingested rollups and inbox captures into pages and regenerates the index; a SessionStart hook injects that index — a symptom lookup and a component map — so recall costs no tool calls; `lint` audits the result for broken wikilinks, orphans, missing frontmatter and schema errors, and never fixes. Reads what `claude-memory` writes and never modifies it. |
 
 Install any of them with `/plugin install <name>@edusouza-plugins` (e.g. `/plugin install delivery-workflow@edusouza-plugins`).
 
