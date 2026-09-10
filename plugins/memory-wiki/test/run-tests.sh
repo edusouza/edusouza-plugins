@@ -514,6 +514,7 @@ for p in README.md skills/lint/SKILL.md commands/lint.md commands/init.md \
          bin/wiki-lint.sh bin/wiki-lint.ps1 bin/wiki-init.sh bin/wiki-lint-project.sh \
          bin/wiki-index.py bin/wiki-index.sh \
          bin/wiki-log.sh bin/wiki-ingest-plan.sh \
+         bin/wiki-inject.sh hooks/hooks.json \
          bin/_wiki-paths.sh assets/wiki-README.md \
          skills/ingest/references/page-authoring.md \
          skills/ingest/SKILL.md commands/ingest.md; do
@@ -663,6 +664,394 @@ else
   fail "lint-project: audits a memory dir with no wiki/ subdir" "$out5"
 fi
 rm -rf "$NOMEM2"
+
+# --- inject: the read half, driven the way Claude Code drives it ---
+# End to end: a throwaway git project, its own memory dir under $HOME/.claude/projects/<hash>,
+# wiki-init.sh plus the real generator, and the payload JSON Claude Code puts on stdin.
+# scratch_project_dir is what keeps this off the user's live memory dir (see its comment);
+# everything created below is deleted at the end of the block.
+#
+# Payloads are written to files and *redirected* in, never piped. A hook that exits before
+# reading stdin makes a piped writer die of EPIPE, and that writer's own stderr would then
+# land in the very output these checks assert is empty.
+#
+# Most of the checks below assert *silence*, which is the easiest thing in the world to assert
+# wrongly: a script that dies on its first line is silent too, and so is one that is not there.
+# Every silence check therefore asserts rc 0 *and* empty output *and* carries
+# `$inj_emit_proof -eq 1` — proof that the one emitting check rendered the fixture's symptom
+# string. A hook that is unconditionally silent fails the whole block instead of passing most
+# of it. The two spawn-budget numbers are gated the same way, on `inj_shim_ok`.
+INJHOOK="$PLUGIN/bin/wiki-inject.sh"
+INJPROJ="$(mktemp -d)"
+( cd "$INJPROJ" && git init -q . ) >/dev/null 2>&1
+INJPDIR="$(scratch_project_dir "$INJPROJ")"
+INJTMP="$(mktemp -d)"
+printf '{"session_id":"0000","transcript_path":"","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
+  "$INJPROJ" > "$INJTMP/payload.json"
+printf 'not json\n' > "$INJTMP/bad.json"
+: > "$INJTMP/empty.json"
+printf '{"hook_event_name":"SessionStart"}' > "$INJTMP/nocwd.json"
+
+# inj_run <payload-file> [VAR=val ...]  -> sets INJ_OUT (stdout+stderr) and INJ_RC.
+# stderr is captured deliberately: a hook must be silent on *both* streams at session start.
+# Deliberately NOT called via $(...) — that would run it in a subshell and discard INJ_OUT.
+INJ_OUT=""; INJ_RC=0
+inj_run() {
+  local pf="$1"; shift
+  INJ_OUT="$(env "$@" bash "$INJHOOK" < "$pf" 2>&1)"; INJ_RC=$?
+}
+
+if [[ -z "$INJPDIR" ]]; then
+  fail "inject: silent and exits 0 with no wiki" \
+    "$INJPROJ resolves to $(wiki_project_dir "$INJPROJ"), which is this repo's own memory
+dir or already exists; refusing to scaffold into it or delete it. Check \$TMPDIR."
+else
+  INJWIKI="$INJPDIR/memory/wiki"
+
+  # Two shapes of "no wiki": no project memory dir at all, and a memory-enabled project
+  # that never ran /memory-wiki:init.
+  inj_run "$INJTMP/payload.json"; inj_a_out="$INJ_OUT"; inj_a_rc=$INJ_RC
+  mkdir -p "$INJPDIR/memory"
+  inj_run "$INJTMP/payload.json"; inj_b_out="$INJ_OUT"; inj_b_rc=$INJ_RC
+  if [[ $inj_a_rc -eq 0 && $inj_b_rc -eq 0 && -z "$inj_a_out" && -z "$inj_b_out" ]]; then
+    pass "inject: silent and exits 0 with no wiki"
+  else
+    fail "inject: silent and exits 0 with no wiki" "no memory dir: rc=$inj_a_rc out=[$inj_a_out]
+no wiki dir:   rc=$inj_b_rc out=[$inj_b_out]"
+  fi
+
+  # A freshly scaffolded wiki holds nothing but the empty-wiki placeholder, and a section
+  # header over "there is nothing here" is worse than no section. This is also the only
+  # "both regions empty" case reachable without a fake atlas, since $HOME/.claude/memory-wiki
+  # exists on no machine until Phase 4. The -f guard distinguishes "suppressed the placeholder"
+  # from "wiki-init.sh silently wrote no index.md at all".
+  bash "$PLUGIN/bin/wiki-init.sh" "$INJPROJ" >/dev/null 2>&1
+  inj_run "$INJTMP/payload.json"
+  if [[ $INJ_RC -eq 0 && -z "$INJ_OUT" && -f "$INJWIKI/index.md" ]]; then
+    pass "inject: a wiki rendering only the empty-wiki placeholder is suppressed"
+  else
+    fail "inject: a wiki rendering only the empty-wiki placeholder is suppressed" \
+      "rc=$INJ_RC  index.md present: $([[ -f "$INJWIKI/index.md" ]] && echo yes || echo NO)
+out=[$INJ_OUT]"
+  fi
+
+  # The non-silent path, and the only check in the block that proves the hook can speak.
+  # Real pages, the real generator, the real hook.
+  cp "$HERE/fixtures/typed/wiki"/*.md "$INJWIKI/" 2>/dev/null
+  "$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$INJWIKI" >/dev/null 2>&1; inj_gen_rc=$?
+  inj_run "$INJTMP/payload.json"; inj_emit_out="$INJ_OUT"; inj_emit_rc=$INJ_RC
+  inj_bad=""
+  [[ $inj_gen_rc -eq 0 ]] || inj_bad="$inj_bad generator rc=$inj_gen_rc;"
+  [[ $inj_emit_rc -eq 0 ]] || inj_bad="$inj_bad hook rc=$inj_emit_rc;"
+  # The section header, the affordance sentence, the symptom string rendered verbatim, and a
+  # page wikilink. ASCII needles only: the header carries an em dash and this file is read on
+  # hosts whose console encoding is not UTF-8.
+  for needle in \
+    '## Memory wiki' \
+    'ONLY when a line below matches' \
+    'demo: fatal: cannot open state file' \
+    '[[failure_demo-crash]]'; do
+    [[ "$inj_emit_out" == *"$needle"* ]] || inj_bad="$inj_bad missing: $needle;"
+  done
+  # The header must name the wiki this output came from, or the model cannot open the pages.
+  [[ "$inj_emit_out" == *"/memory/wiki"* ]] || inj_bad="$inj_bad header does not name the wiki path;"
+  if [[ -z "$inj_bad" ]]; then
+    pass "inject: emits the project index region"
+  else
+    fail "inject: emits the project index region" "$inj_bad
+$inj_emit_out"
+  fi
+  # The proof every silence check below leans on. Emphatically not `-n "$inj_emit_out"`: while
+  # the hook did not exist at all, that variable held bash's "No such file or directory" and a
+  # bare emptiness guard was satisfied by the error message for the very failure it exists to
+  # detect. Only the rendered symptom string proves the emitting path actually ran.
+  inj_emit_proof=0
+  [[ "$inj_emit_out" == *'demo: fatal: cannot open state file'* ]] && inj_emit_proof=1
+
+  # Both switches, checked against the wiki that just produced output — so this pins the
+  # suppression itself, not an index that had nothing in it either way.
+  inj_run "$INJTMP/payload.json" MEMORY_WIKI_NO_INJECT=1;       inj_n_out="$INJ_OUT"; inj_n_rc=$INJ_RC
+  inj_run "$INJTMP/payload.json" CLAUDE_MEMORY_CONSOLIDATING=1; inj_c_out="$INJ_OUT"; inj_c_rc=$INJ_RC
+  if [[ $inj_n_rc -eq 0 && $inj_c_rc -eq 0 && -z "$inj_n_out" && -z "$inj_c_out" \
+        && $inj_emit_proof -eq 1 ]]; then
+    pass "inject: honours MEMORY_WIKI_NO_INJECT and CLAUDE_MEMORY_CONSOLIDATING"
+  else
+    fail "inject: honours MEMORY_WIKI_NO_INJECT and CLAUDE_MEMORY_CONSOLIDATING" \
+      "NO_INJECT:     rc=$inj_n_rc out=[$inj_n_out]
+CONSOLIDATING: rc=$inj_c_rc out=[$inj_c_out]
+emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' proves nothing)"
+  fi
+
+  # Three shapes of unusable payload: not JSON at all, nothing on stdin, and valid JSON with
+  # no cwd. All silent, all rc 0 — the hook has no business reporting a malformed payload to
+  # the user at session start.
+  inj_run "$INJTMP/bad.json";   inj_p1="$INJ_OUT"; inj_r1=$INJ_RC
+  inj_run "$INJTMP/empty.json"; inj_p2="$INJ_OUT"; inj_r2=$INJ_RC
+  inj_run "$INJTMP/nocwd.json"; inj_p3="$INJ_OUT"; inj_r3=$INJ_RC
+  if [[ $inj_r1 -eq 0 && $inj_r2 -eq 0 && $inj_r3 -eq 0 \
+        && -z "$inj_p1" && -z "$inj_p2" && -z "$inj_p3" && $inj_emit_proof -eq 1 ]]; then
+    pass "inject: unparseable payload is a silent no-op"
+  else
+    fail "inject: unparseable payload is a silent no-op" "not json:  rc=$inj_r1 out=[$inj_p1]
+empty:     rc=$inj_r2 out=[$inj_p2]
+no cwd:    rc=$inj_r3 out=[$inj_p3]
+emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' proves nothing)"
+  fi
+
+  # No python at all. Everything the hook touches before the interpreter probe is either a
+  # bash builtin or a `.` of a sibling file, so emptying PATH is enough to hide python without
+  # disturbing anything else — bash is invoked by absolute path for exactly that reason. This
+  # is the last of the brief's silent-exit conditions and the only one with no other coverage.
+  INJ_OUT="$(env PATH="$INJTMP/no-such-bin" "${BASH:-bash}" "$INJHOOK" \
+    < "$INJTMP/payload.json" 2>&1)"; INJ_RC=$?
+  if [[ $INJ_RC -eq 0 && -z "$INJ_OUT" && $inj_emit_proof -eq 1 ]]; then
+    pass "inject: no python runtime is a silent no-op"
+  else
+    fail "inject: no python runtime is a silent no-op" "rc=$INJ_RC out=[$INJ_OUT]
+emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' proves nothing)"
+  fi
+
+  # The payload shape Claude Code actually sends on this platform: cwd as a Windows path,
+  # whose separators arrive JSON-escaped as \\. It has to land on the same memory dir as the
+  # POSIX spelling — the hook is the only caller that takes a path straight out of JSON, so
+  # a lost unescaping step would show up here and nowhere else in the suite.
+  if command -v cygpath >/dev/null 2>&1; then
+    inj_win="$(cygpath -w "$INJPROJ" 2>/dev/null)"
+    printf '{"cwd":"%s","hook_event_name":"SessionStart"}' "${inj_win//\\/\\\\}" \
+      > "$INJTMP/winpath.json"
+    inj_run "$INJTMP/winpath.json"
+    if [[ $INJ_RC -eq 0 && "$INJ_OUT" == "$inj_emit_out" && $inj_emit_proof -eq 1 ]]; then
+      pass "inject: a Windows-style escaped cwd resolves to the same wiki"
+    else
+      fail "inject: a Windows-style escaped cwd resolves to the same wiki" \
+        "cwd sent: ${inj_win//\\/\\\\}
+rc=$INJ_RC
+$(diff <(echo "$inj_emit_out") <(echo "$INJ_OUT") || true)"
+    fi
+  else
+    pass "inject: Windows-style cwd check skipped (no cygpath)"
+  fi
+
+  # --- the atlas half ---
+  # Phase 4 populates $HOME/.claude/memory-wiki; until then that dir exists on no machine, so
+  # the atlas emission branch would ship completely unexercised. MEMORY_WIKI_ATLAS_DIR is the
+  # seam that lets it be driven here and is the only reason it exists — the default is still
+  # $HOME/.claude/memory-wiki, the same path wiki-lint-project.sh hardcodes.
+  INJATL="$INJTMP/atlas"; mkdir -p "$INJATL"
+  printf '%s\n' '# Wiki index' '' \
+    '<!-- BEGIN memory-wiki (managed; do not edit by hand) -->' \
+    '(no pages yet — run /memory-wiki:ingest)' \
+    '<!-- END memory-wiki -->' > "$INJATL/index.md"
+  inj_run "$INJTMP/payload.json" MEMORY_WIKI_ATLAS_DIR="$INJATL"
+  inj_at_empty="$INJ_OUT"; inj_at_erc=$INJ_RC
+  printf '%s\n' '# Wiki index' '' \
+    '<!-- BEGIN memory-wiki (managed; do not edit by hand) -->' \
+    '## Map' \
+    '- [[atlas/global-thing]] — a cross-project page' \
+    '<!-- END memory-wiki -->' > "$INJATL/index.md"
+  inj_run "$INJTMP/payload.json" MEMORY_WIKI_ATLAS_DIR="$INJATL"
+  inj_at_full="$INJ_OUT"; inj_at_frc=$INJ_RC
+  inj_bad=""
+  [[ $inj_at_erc -eq 0 && $inj_at_frc -eq 0 ]] \
+    || inj_bad="$inj_bad rc placeholder=$inj_at_erc populated=$inj_at_frc;"
+  # Both runs must still print the project section: that is what distinguishes "the atlas was
+  # suppressed" from "the hook fell over before it got there".
+  [[ "$inj_at_empty" == *'## Memory wiki'* ]] \
+    || inj_bad="$inj_bad placeholder-atlas run printed no project section;"
+  [[ "$inj_at_full" == *'## Memory wiki'* ]] \
+    || inj_bad="$inj_bad populated-atlas run printed no project section;"
+  [[ "$inj_at_empty" != *'cross-project atlas'* ]] \
+    || inj_bad="$inj_bad a placeholder-only atlas got a section header;"
+  [[ "$inj_at_full" == *'cross-project atlas'* ]] \
+    || inj_bad="$inj_bad a non-empty atlas got no section header;"
+  [[ "$inj_at_full" == *'[[atlas/global-thing]]'* ]] \
+    || inj_bad="$inj_bad the atlas section carried no body;"
+  if [[ -z "$inj_bad" ]]; then
+    pass "inject: the atlas section appears only when its region is non-empty"
+  else
+    fail "inject: the atlas section appears only when its region is non-empty" "$inj_bad
+--- placeholder atlas ---
+$inj_at_empty
+--- populated atlas ---
+$inj_at_full"
+  fi
+
+  # --- spawn budget ---
+  # Same shim technique as claude-memory/test/run-tests.sh: put a logging wrapper for every
+  # external binary this path can reach on the front of PATH, run the hook, count the log.
+  # This asserts the property the hook actually cares about (how many processes start) rather
+  # than a wall-clock number that would be flaky. On this machine a spawn costs ~430 ms — 50
+  # of them measured 21.5 s — and this hook blocks *every* session start.
+  #
+  # CLAUDE_PLUGIN_ROOT is exported because Claude Code sets it, and the hook's fallback for
+  # locating its own bin/ is pure parameter expansion precisely so that it costs nothing
+  # either way; leaving it unset here would measure a path production never takes.
+  INJSHIM="$(mktemp -d)"
+  INJLOG="$INJSHIM/calls.log"; : > "$INJLOG"
+  for bin in git cygpath sed awk grep tr wc cat head tail cut python python3 \
+             basename dirname realpath readlink; do
+    real="$(command -v "$bin" 2>/dev/null)" || continue
+    [[ -z "$real" ]] && continue
+    cat > "$INJSHIM/$bin" <<EOF
+#!/usr/bin/env bash
+echo "$bin" >> "$INJLOG"
+exec "$real" "\$@"
+EOF
+    chmod +x "$INJSHIM/$bin"
+  done
+
+  # Sets the globals INJ_SPAWN_OUT and INJ_SPAWNS. Deliberately NOT called via $(...) — that
+  # would run it in a subshell and discard both. The PATH assignment is scoped to the inner
+  # subshell so the wc/tr that read the log are never themselves counted.
+  INJ_SPAWN_OUT=""; INJ_SPAWNS=0
+  inj_count_spawns() {
+    local pf="$1"; shift
+    : > "$INJLOG"
+    INJ_SPAWN_OUT="$( PATH="$INJSHIM:$PATH"; env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" \
+      bash "$INJHOOK" < "$pf" 2>/dev/null )"
+    INJ_SPAWNS="$(wc -l < "$INJLOG" | tr -d ' ')"
+  }
+
+  # Budget, enumerated from the shim's own log rather than guessed:
+  #   1  python    parse the payload JSON — the hook's whole job is to resolve the memory dir
+  #                from the payload's cwd, so there is no environment shortcut past it
+  #   7  inside wiki_project_dir: cygpath -u, three git rev-parse, dirname, cygpath -w, sed
+  #   1  cygpath -m  to name the wiki in the section header
+  # Region extraction is a bash `while read` loop and costs nothing at all; the awk
+  # wiki-lint.sh uses to measure the same region would be one spawn per file, two more here.
+  #
+  # The `dirname` is worth naming because it is not obvious: on Windows, `git rev-parse
+  # --absolute-git-dir` answers in mixed form (C:/…) while --git-common-dir resolves to POSIX
+  # form (/c/…), so wiki_resolve_main_root's string comparison reads *every* git repo as a
+  # linked worktree and takes the dirname branch. It still returns the right root — for a main
+  # worktree dirname(<root>/.git) is <root> — but it costs a process every time.
+  #
+  # None of wiki_project_dir's seven are this task's to cut: it is the shared vendored
+  # resolver every other memory-wiki entry point uses, and forking it here so the hook is
+  # faster is precisely how a project's memory and its wiki end up in different directories.
+  INJ_BUDGET=9
+  inj_count_spawns "$INJTMP/payload.json"
+  inj_got="$INJ_SPAWNS"; inj_budget_out="$INJ_SPAWN_OUT"
+  # The shimmed run must still produce the RIGHT output, or a shim that perturbs the code
+  # under test could report a flattering number for a run that did nothing at all. Both
+  # numeric checks below are gated on this: while the hook did not yet exist, they reported
+  # 0 spawns and PASSed — the best budget in the suite, for a script that was not there.
+  inj_shim_ok=0
+  [[ "$inj_budget_out" == *'demo: fatal: cannot open state file'* \
+     && "$inj_budget_out" == *'## Memory wiki'* ]] && inj_shim_ok=1
+  if (( inj_shim_ok )); then
+    pass "spawn budget: shimmed run still injects the region"
+  else
+    fail "spawn budget: shimmed run still injects the region" "$inj_budget_out"
+  fi
+  if (( inj_shim_ok )) && [[ "$inj_got" -le "$INJ_BUDGET" ]]; then
+    pass "spawn budget: wiki-inject.sh uses $inj_got process(es) (budget $INJ_BUDGET)"
+  else
+    fail "spawn budget: wiki-inject.sh" "spawned $inj_got processes, budget is $INJ_BUDGET
+shimmed run injected the region: $inj_shim_ok (0 makes the count above meaningless)
+called: $(sort "$INJLOG" | uniq -c | tr '\n' ' ')
+On Windows each spawn costs 0.15-1.1s in a SessionStart hook."
+  fi
+  # ...and the two opt-outs must cost nothing at all. They are the first two lines of the
+  # script for that reason: a guard that fires only after the memory dir has been resolved
+  # would already have spent the whole budget.
+  inj_count_spawns "$INJTMP/payload.json" MEMORY_WIKI_NO_INJECT=1
+  inj_off="$INJ_SPAWNS"; inj_off_out="$INJ_SPAWN_OUT"
+  if (( inj_shim_ok )) && [[ "$inj_off" -eq 0 && -z "$inj_off_out" ]]; then
+    pass "spawn budget: MEMORY_WIKI_NO_INJECT short-circuits before any process starts"
+  else
+    fail "spawn budget: MEMORY_WIKI_NO_INJECT short-circuits before any process starts" \
+      "spawned $inj_off processes, output=[$inj_off_out]
+called: $(sort "$INJLOG" | uniq -c | tr '\n' ' ')"
+  fi
+  rm -rf "$INJSHIM"
+
+  # --- region pairing: the reader must agree with the writer ---
+  # write_region in bin/wiki-index.py pairs the LAST BEGIN before the first END that follows
+  # it, not the first BEGIN. It ships that rule because the naive pairing destroyed content on
+  # a file carrying a leftover dangling BEGIN — the run swallowed every foreign line between
+  # the stale marker and the new END. A reader that disagrees with the writer about which span
+  # is *the* region injects exactly those foreign lines, so pin the reader to the same rule.
+  # Second case: a BEGIN with no END at all is not a region running to end of file.
+  printf '%s\n' '# Wiki index' '' \
+    '<!-- BEGIN memory-wiki (managed; do not edit by hand) -->' \
+    'INJ-STALE-LEFTOVER' '' \
+    '<!-- BEGIN memory-wiki (managed; do not edit by hand) -->' \
+    '## Map' \
+    '- [[project_demo]] — the live region' \
+    '<!-- END memory-wiki -->' > "$INJWIKI/index.md"
+  inj_run "$INJTMP/payload.json"; inj_pair_out="$INJ_OUT"; inj_pair_rc=$INJ_RC
+  printf '%s\n' '# Wiki index' '' \
+    '<!-- BEGIN memory-wiki (managed; do not edit by hand) -->' \
+    'INJ-ORPHAN-TAIL' > "$INJWIKI/index.md"
+  inj_run "$INJTMP/payload.json"; inj_orph_out="$INJ_OUT"; inj_orph_rc=$INJ_RC
+  inj_bad=""
+  [[ $inj_pair_rc -eq 0 && $inj_orph_rc -eq 0 ]] \
+    || inj_bad="$inj_bad rc dangling=$inj_pair_rc orphan=$inj_orph_rc;"
+  [[ "$inj_pair_out" == *'[[project_demo]]'* ]] || inj_bad="$inj_bad the well-formed pair's body was not injected;"
+  [[ "$inj_pair_out" != *'INJ-STALE-LEFTOVER'* ]] || inj_bad="$inj_bad injected the line above the stale BEGIN;"
+  [[ -z "$inj_orph_out" ]] || inj_bad="$inj_bad an unterminated BEGIN injected to end of file;"
+  if [[ -z "$inj_bad" ]]; then
+    pass "inject: region pairing matches write_region (last BEGIN, first END after it)"
+  else
+    fail "inject: region pairing matches write_region (last BEGIN, first END after it)" "$inj_bad
+--- dangling BEGIN ---
+$inj_pair_out
+--- unterminated BEGIN ---
+$inj_orph_out"
+  fi
+
+  rm -rf "$INJPDIR"
+fi
+rm -rf "$INJPROJ" "$INJTMP"
+
+# --- hooks: the manifest Claude Code actually reads ---
+# Parsed, not grepped. Two independent failures live here and both are silent: a command that
+# does not begin with the literal ${CLAUDE_PLUGIN_ROOT}/ is never expanded and the hook dies at
+# load time with "Shell substitution failed ... (detail withheld)"; and a SessionStart matcher
+# that does not name wiki-inject.sh means the whole read half of memory-wiki never runs.
+#
+# The count assertion is load-bearing, not decoration. "*Every* command starts with
+# ${CLAUDE_PLUGIN_ROOT}/" is vacuously true of a manifest that parses to {} — which is exactly
+# the false-pass shape this harness keeps producing — so the number of commands found is
+# asserted before anything is asserted about them.
+HOOKSJSON="$PLUGIN/hooks/hooks.json"
+hooks_dump="$("$PYBIN" -c "
+import json,sys
+d = json.load(open(sys.argv[1]))
+for event, matchers in sorted(d.get('hooks', {}).items()):
+    for m in matchers:
+        for h in m.get('hooks', []):
+            print('%s\t%s\t%s' % (event, h.get('command',''), h.get('statusMessage','')))
+" "$HOOKSJSON" 2>&1)"; hooks_rc=$?
+hooks_bad=""; hooks_n=0; hooks_inject=0
+if [[ $hooks_rc -ne 0 || -z "$hooks_dump" ]]; then
+  hooks_bad="hooks.json did not parse into any hook command (rc=$hooks_rc):
+$hooks_dump"
+else
+  while IFS=$'\t' read -r hk_event hk_cmd hk_status; do
+    [[ -z "$hk_event$hk_cmd" ]] && continue
+    hooks_n=$((hooks_n + 1))
+    # The literal string, not a shell expansion of it — hence the single quotes.
+    [[ "$hk_cmd" == '${CLAUDE_PLUGIN_ROOT}/'* ]] \
+      || hooks_bad="$hooks_bad
+      $hk_event: command does not start with \${CLAUDE_PLUGIN_ROOT}/ : $hk_cmd"
+    if [[ "$hk_event" == "SessionStart" && "$hk_cmd" == *'/bin/wiki-inject.sh' ]]; then
+      hooks_inject=1
+      [[ -n "$hk_status" ]] || hooks_bad="$hooks_bad
+      SessionStart wiki-inject.sh has no statusMessage"
+    fi
+  done <<< "$hooks_dump"
+  (( hooks_n > 0 )) || hooks_bad="$hooks_bad
+      no hook commands declared at all"
+  (( hooks_inject )) || hooks_bad="$hooks_bad
+      no SessionStart command ending in /bin/wiki-inject.sh"
+fi
+if [[ -z "$hooks_bad" ]]; then
+  pass "hooks: SessionStart declares wiki-inject with \${CLAUDE_PLUGIN_ROOT} ($hooks_n command(s))"
+else
+  fail "hooks: SessionStart declares wiki-inject with \${CLAUDE_PLUGIN_ROOT}" "$hooks_bad"
+fi
 
 # --- smoke: run against a real memory dir if one exists ---
 # Asserts shape only. Counts change as memory grows and must never be pinned here.
