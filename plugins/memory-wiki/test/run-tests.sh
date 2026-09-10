@@ -514,7 +514,7 @@ for p in README.md skills/lint/SKILL.md commands/lint.md commands/init.md \
          bin/wiki-lint.sh bin/wiki-lint.ps1 bin/wiki-init.sh bin/wiki-lint-project.sh \
          bin/wiki-index.py bin/wiki-index.sh \
          bin/wiki-log.sh bin/wiki-ingest-plan.sh \
-         bin/wiki-inject.sh hooks/hooks.json \
+         bin/wiki-inject.sh bin/wiki-nudge.sh hooks/hooks.json \
          bin/_wiki-paths.sh assets/wiki-README.md \
          skills/ingest/references/page-authoring.md \
          skills/ingest/SKILL.md commands/ingest.md; do
@@ -1101,6 +1101,270 @@ $inj_pair_out
 $inj_orph_out"
   fi
 
+  # --- nudge: the ingest-pending reminder, on the same scratch project ---
+  # Same discipline as the injection checks above, and for a sharper reason: two of these three
+  # assertions are assertions of SILENCE, and a script that dies on its first line is silent,
+  # and so is one that is not there at all. Every silent assertion below therefore carries
+  # `$nudge_proof -eq 1` — set only by the one run that rendered the header AND a week name.
+  # Replace bin/wiki-nudge.sh with `exit 0` and the emitting check fails, which drags every
+  # silence check down with it. That coupling is the point of the variable.
+  #
+  # Silence is measured in BYTES, never with `-z` on a $(...) capture. Command substitution
+  # strips trailing newlines, so a nudge that printed nothing but a blank line would compare
+  # equal to "" and these checks would certify the exact defect they exist to catch:
+  # `wiki-ingest-plan.sh --pending-only` prints nothing at all when nothing is pending, and one
+  # stray newline read back by the counter is a pending rollup named "" — a nag about a week
+  # that does not exist, which no ingest can ever clear.
+  NUDGEHOOK="$PLUGIN/bin/wiki-nudge.sh"
+  NUDGEWEEK="$INJPDIR/memory/episodic/weekly"
+
+  # Sets NUDGE_OUT / NUDGE_RC / NUDGE_BYTES from ONE invocation captured to a file, so the byte
+  # count, the exit status and the text all describe the same run. Deliberately NOT called via
+  # $(...) — that would run it in a subshell and discard all three.
+  #
+  # stdout and stderr both, and the payload redirected from a file rather than piped, for the
+  # reasons inj_run gives. CLAUDE_PROJECT_DIR is unset and CLAUDE_PLUGIN_ROOT pinned to this
+  # checkout for the same reason too: the suite runs inside a Claude Code session that exports
+  # both, and inheriting either would point every check below at the real repo and the
+  # installed plugin instead of the throwaway project and this working tree.
+  NUDGE_OUT=""; NUDGE_RC=0; NUDGE_BYTES=0
+  nudge_run() {
+    local pf="$1"; shift
+    env -u CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" \
+      bash "$NUDGEHOOK" < "$pf" > "$INJTMP/nudge.out" 2>&1
+    NUDGE_RC=$?
+    NUDGE_BYTES="$(wc -c < "$INJTMP/nudge.out" | tr -d '[:space:]')"
+    NUDGE_OUT="$(cat "$INJTMP/nudge.out")"
+  }
+
+  # The steady state, in its two shapes: a memory dir with no episodic/weekly at all, and one
+  # with an empty weekly/ (what a memory-enabled project looks like before its first rollup).
+  # Both must run before any rollup exists, so they are captured here and reported further
+  # down, once there is a proof to gate them on. Reporting them here would leave the block's
+  # two earliest checks backed by nothing but "rc 0 and no bytes" — which separates a crash
+  # from silence, but not silence-by-accident: a hook replaced wholesale by `exit 0` passes
+  # both, and so does one whose resolver failed to load.
+  nudge_run "$INJTMP/payload.json"
+  nudge_a_b="$NUDGE_BYTES"; nudge_a_rc=$NUDGE_RC; nudge_a_out="$NUDGE_OUT"
+  mkdir -p "$NUDGEWEEK"
+  nudge_run "$INJTMP/payload.json"
+  nudge_b_b="$NUDGE_BYTES"; nudge_b_rc=$NUDGE_RC; nudge_b_out="$NUDGE_OUT"
+
+  # The one emitting run, and the only check in the block that proves the hook can speak. Two
+  # rollups, neither of them cited by a `- Sources:` line in the wiki's log.md.
+  printf 'week 35\n' > "$NUDGEWEEK/2026-W35.md"
+  printf 'week 36\n' > "$NUDGEWEEK/2026-W36.md"
+  nudge_run "$INJTMP/payload.json"
+  nudge_emit_out="$NUDGE_OUT"; nudge_emit_rc=$NUDGE_RC
+  nudge_bad=""
+  [[ $nudge_emit_rc -eq 0 ]] || nudge_bad="$nudge_bad rc=$nudge_emit_rc;"
+  # The header, the count, both week names, and the command to run. The count is asserted as
+  # the literal '2 weekly rollups' rather than as a bare digit: a nudge whose count disagreed
+  # with the list it printed would still contain both names, and that is precisely the shape
+  # that teaches the user to stop believing the number.
+  for needle in \
+    '## Memory wiki - ingest pending' \
+    '2 weekly rollups' \
+    '2026-W35' \
+    '2026-W36' \
+    'Run:  /memory-wiki:ingest'; do
+    [[ "$nudge_emit_out" == *"$needle"* ]] || nudge_bad="$nudge_bad missing: $needle;"
+  done
+  # Exactly three lines. The count and the names share one line by design, so a fourth line is
+  # session-start context nobody agreed to spend.
+  nudge_n="$(printf '%s\n' "$nudge_emit_out" | wc -l | tr -d '[:space:]')"
+  [[ "$nudge_n" == "3" ]] || nudge_bad="$nudge_bad printed $nudge_n line(s), want 3;"
+  if [[ -z "$nudge_bad" ]]; then
+    pass "nudge: names the pending rollups"
+  else
+    fail "nudge: names the pending rollups" "$nudge_bad
+$nudge_emit_out"
+  fi
+  # The proof every silence check leans on. Emphatically not `-n "$nudge_emit_out"`: while the
+  # script did not exist that variable held bash's "No such file or directory", which satisfies
+  # a bare emptiness guard perfectly — that exact false pass has already happened twice on this
+  # branch. Only the header plus a rendered week name proves the emitting path ran.
+  nudge_proof=0
+  [[ "$nudge_emit_out" == *'## Memory wiki - ingest pending'* \
+     && "$nudge_emit_out" == *'2026-W36'* ]] && nudge_proof=1
+
+  if [[ $nudge_a_rc -eq 0 && $nudge_b_rc -eq 0 && "$nudge_a_b" == "0" && "$nudge_b_b" == "0" \
+        && $nudge_proof -eq 1 ]]; then
+    pass "nudge: silent when nothing is pending"
+  else
+    fail "nudge: silent when nothing is pending" "no weekly dir: rc=$nudge_a_rc bytes=$nudge_a_b out=[$nudge_a_out]
+empty weekly/: rc=$nudge_b_rc bytes=$nudge_b_b out=[$nudge_b_out]
+emitting run rendered the header and a week name: $nudge_proof (must be 1, or 'silent' proves nothing)"
+  fi
+
+  # Every remaining suppression is measured against the state that just produced three lines,
+  # so a pass means the suppression fired — not that the project had nothing to say anyway.
+  nudge_run "$INJTMP/payload.json" MEMORY_WIKI_NO_NUDGE=1
+  nudge_off_b="$NUDGE_BYTES"; nudge_off_rc=$NUDGE_RC; nudge_off_out="$NUDGE_OUT"
+  nudge_run "$INJTMP/payload.json" CLAUDE_MEMORY_CONSOLIDATING=1
+  nudge_con_b="$NUDGE_BYTES"; nudge_con_rc=$NUDGE_RC; nudge_con_out="$NUDGE_OUT"
+
+  # Four unusable payloads: not JSON, nothing on stdin, valid JSON with no cwd, and — not a
+  # malformed payload at all — a cwd naming a directory that does not exist, which parses and
+  # resolves and simply has no memory dir under it. None of them is the user's problem at
+  # session start, so all four are silent and rc 0.
+  printf '{"cwd":"%s","hook_event_name":"SessionStart"}' "$INJTMP/no-such-project" \
+    > "$INJTMP/ghostcwd.json"
+  nudge_run "$INJTMP/bad.json";       nudge_p1="$NUDGE_BYTES"; nudge_r1=$NUDGE_RC; nudge_o1="$NUDGE_OUT"
+  nudge_run "$INJTMP/empty.json";     nudge_p2="$NUDGE_BYTES"; nudge_r2=$NUDGE_RC; nudge_o2="$NUDGE_OUT"
+  nudge_run "$INJTMP/nocwd.json";     nudge_p3="$NUDGE_BYTES"; nudge_r3=$NUDGE_RC; nudge_o3="$NUDGE_OUT"
+  nudge_run "$INJTMP/ghostcwd.json";  nudge_p4="$NUDGE_BYTES"; nudge_r4=$NUDGE_RC; nudge_o4="$NUDGE_OUT"
+  if [[ $nudge_con_rc -eq 0 && $nudge_r1 -eq 0 && $nudge_r2 -eq 0 && $nudge_r3 -eq 0 \
+        && $nudge_r4 -eq 0 && "$nudge_con_b" == "0" && "$nudge_p1" == "0" \
+        && "$nudge_p2" == "0" && "$nudge_p3" == "0" && "$nudge_p4" == "0" \
+        && $nudge_proof -eq 1 ]]; then
+    pass "nudge: CLAUDE_MEMORY_CONSOLIDATING and an unusable payload are silent no-ops"
+  else
+    fail "nudge: CLAUDE_MEMORY_CONSOLIDATING and an unusable payload are silent no-ops" \
+      "CONSOLIDATING: rc=$nudge_con_rc bytes=$nudge_con_b out=[$nudge_con_out]
+not json:      rc=$nudge_r1 bytes=$nudge_p1 out=[$nudge_o1]
+empty:         rc=$nudge_r2 bytes=$nudge_p2 out=[$nudge_o2]
+no cwd:        rc=$nudge_r3 bytes=$nudge_p3 out=[$nudge_o3]
+absent cwd:    rc=$nudge_r4 bytes=$nudge_p4 out=[$nudge_o4]
+emitting run rendered the header and a week name: $nudge_proof (must be 1, or 'silent' proves nothing)"
+  fi
+
+  # --- spawn budget (Ruling 3) ---
+  # Same shim technique as the injection budget above, with one addition that matters here:
+  # `bash` is shimmed too. The one process this hook exists to start is a child
+  # `bash bin/wiki-ingest-plan.sh`, and a budget blind to it would be measuring everything
+  # except the thing it is for. Two consequences, both deliberate:
+  #   * every shim's shebang names the real bash by ABSOLUTE PATH instead of the usual
+  #     `/usr/bin/env bash`. With a `bash` shim on PATH, `env bash` resolves to the shim, which
+  #     would log a spurious "bash" for every other shimmed call and run each shim under itself.
+  #   * the hook under test is launched through $NUDGE_REALBASH rather than through PATH, so
+  #     the harness's own invocation is not counted as one of the hook's spawns.
+  NUDGESHIM="$(mktemp -d)"
+  NUDGELOG="$NUDGESHIM/calls.log"; : > "$NUDGELOG"
+  NUDGE_REALBASH="$(command -v bash 2>/dev/null)"
+  [[ -n "$NUDGE_REALBASH" ]] || NUDGE_REALBASH="${BASH:-/bin/bash}"
+  for bin in bash git cygpath sed awk grep tr wc cat head tail cut python python3 \
+             basename dirname realpath readlink; do
+    real="$(command -v "$bin" 2>/dev/null)" || continue
+    [[ -z "$real" ]] && continue
+    cat > "$NUDGESHIM/$bin" <<EOF
+#!$NUDGE_REALBASH
+echo "$bin" >> "$NUDGELOG"
+exec "$real" "\$@"
+EOF
+    chmod +x "$NUDGESHIM/$bin"
+  done
+
+  # Sets NUDGE_SPAWN_OUT and NUDGE_SPAWNS. Not called via $(...), which would discard both.
+  # The PATH assignment is scoped to the inner subshell so the wc/tr that read the log are
+  # never themselves counted.
+  NUDGE_SPAWN_OUT=""; NUDGE_SPAWNS=0
+  nudge_count_spawns() {
+    local pf="$1"; shift
+    : > "$NUDGELOG"
+    NUDGE_SPAWN_OUT="$( PATH="$NUDGESHIM:$PATH"; env -u CLAUDE_PROJECT_DIR \
+      CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" "$NUDGE_REALBASH" "$NUDGEHOOK" < "$pf" 2>/dev/null )"
+    NUDGE_SPAWNS="$(wc -l < "$NUDGELOG" | tr -d ' ')"
+  }
+
+  # Two budgets, enumerated from the shim's own log rather than guessed:
+  #
+  #   payload path (CLAUDE_PROJECT_DIR unset, non-Claude hosts) — 3 processes
+  #     1  python   parse the payload JSON for its cwd
+  #     1  git      one `rev-parse` inside wiki_project_dir answers every question it has
+  #     1  bash     the child wiki-ingest-plan.sh, which owns the pending calculation
+  #
+  #   fast path (CLAUDE_PROJECT_DIR exported, every real Claude Code session) — 2 processes
+  #     the git and the bash above; python is skipped entirely, and it is the most expensive
+  #     spawn in the set (memory-inject.sh measures python at 1.1 s on Windows)
+  #
+  # The child is 1 and not 3 because the memory dir is passed to it EXPLICITLY (Ruling 14):
+  # argument-less it would resolve the project a second time inside wiki_project_dir, measured
+  # at ~0.746 s against ~0.155 s. Everything else here is a bash builtin — the pending list is
+  # split with a here-string, not with a `tr`, and joined by parameter expansion, not `paste`.
+  NUDGE_BUDGET=3
+  NUDGE_BUDGET_FAST=2
+  nudge_count_spawns "$INJTMP/payload.json"
+  nudge_got="$NUDGE_SPAWNS"; nudge_budget_out="$NUDGE_SPAWN_OUT"
+  # The shimmed run must still produce the RIGHT output, or a shim that perturbed the code
+  # under test could report a flattering number for a run that did nothing at all. Both numeric
+  # checks below are gated on this: two budget lines on this branch once reported 0 spawns and
+  # PASSed — the best budget in the suite, for a script that was not there.
+  nudge_shim_ok=0
+  [[ "$nudge_budget_out" == *'## Memory wiki - ingest pending'* \
+     && "$nudge_budget_out" == *'2026-W36'* ]] && nudge_shim_ok=1
+  if (( nudge_shim_ok )); then
+    pass "spawn budget: shimmed run still prints the nudge"
+  else
+    fail "spawn budget: shimmed run still prints the nudge" "$nudge_budget_out"
+  fi
+  if (( nudge_shim_ok )) && [[ "$nudge_got" -le "$NUDGE_BUDGET" ]]; then
+    pass "spawn budget: wiki-nudge.sh uses $nudge_got process(es) (budget $NUDGE_BUDGET)"
+  else
+    fail "spawn budget: wiki-nudge.sh" "spawned $nudge_got processes, budget is $NUDGE_BUDGET
+shimmed run printed the nudge: $nudge_shim_ok (0 makes the count above meaningless)
+called: $(sort "$NUDGELOG" | uniq -c | tr '\n' ' ')
+On Windows each spawn costs 0.15-1.1s in a SessionStart hook."
+  fi
+
+  # The fast path, which is the one every real session start takes. Measured separately rather
+  # than inferred from the number above: what is asserted is that the exported cwd actually
+  # removes the python spawn, not merely that it is preferred.
+  : > "$NUDGELOG"
+  nudge_fast_out="$( PATH="$NUDGESHIM:$PATH"; env CLAUDE_PROJECT_DIR="$INJPROJ" \
+    CLAUDE_PLUGIN_ROOT="$PLUGIN" "$NUDGE_REALBASH" "$NUDGEHOOK" \
+    < "$INJTMP/blankcwd.json" 2>/dev/null )"
+  nudge_fast="$(wc -l < "$NUDGELOG" | tr -d ' ')"
+  # No `|| echo 0`: grep -c already prints 0 when it matches nothing, and the fallback would
+  # append a second line, turning the numeric test below into a syntax error on the happy path.
+  nudge_fast_py="$(grep -c '^python' "$NUDGELOG" 2>/dev/null)"; nudge_fast_py="${nudge_fast_py:-0}"
+  # blankcwd.json carries an empty cwd, so output here can only mean CLAUDE_PROJECT_DIR won.
+  nudge_fast_ok=0
+  [[ "$nudge_fast_out" == *'2026-W36'* ]] && nudge_fast_ok=1
+  if (( nudge_fast_ok )) && [[ "$nudge_fast" -le "$NUDGE_BUDGET_FAST" && "$nudge_fast_py" -eq 0 ]]; then
+    pass "spawn budget: with CLAUDE_PROJECT_DIR set, $nudge_fast process(es) and no python (budget $NUDGE_BUDGET_FAST)"
+  else
+    fail "spawn budget: with CLAUDE_PROJECT_DIR set" \
+      "spawned $nudge_fast processes (budget $NUDGE_BUDGET_FAST), python calls=$nudge_fast_py
+shimmed run printed the nudge: $nudge_fast_ok (0 makes the count above meaningless)
+called: $(sort "$NUDGELOG" | uniq -c | tr '\n' ' ')"
+  fi
+
+  # ...and the kill switch must cost nothing at all. It is the second line of the script for
+  # that reason: a guard that fired only after the memory dir had been resolved would already
+  # have spent the whole budget on a user who asked for none of it.
+  nudge_count_spawns "$INJTMP/payload.json" MEMORY_WIKI_NO_NUDGE=1
+  nudge_off_s="$NUDGE_SPAWNS"; nudge_off_sout="$NUDGE_SPAWN_OUT"
+  if (( nudge_shim_ok )) && [[ "$nudge_off_s" -eq 0 && -z "$nudge_off_sout" ]]; then
+    pass "spawn budget: MEMORY_WIKI_NO_NUDGE short-circuits before any process starts"
+  else
+    fail "spawn budget: MEMORY_WIKI_NO_NUDGE short-circuits before any process starts" \
+      "spawned $nudge_off_s processes, output=[$nudge_off_sout]
+shimmed run printed the nudge: $nudge_shim_ok (0 makes the count above meaningless)
+called: $(sort "$NUDGELOG" | uniq -c | tr '\n' ' ')"
+  fi
+  rm -rf "$NUDGESHIM"
+
+  # The ledger closes it, and this is the round trip that matters at session start: wiki-log.sh
+  # is the only writer of the `- Sources:` lines and wiki-ingest-plan.sh the only reader, so
+  # citing both weeks must leave the nudge with nothing to say. A nudge that kept talking after
+  # a completed ingest is one the user learns to ignore, which is the same as not having one.
+  nudge_log="$(bash "$PLUGIN/bin/wiki-log.sh" --wiki "$INJWIKI" --op ingest \
+    --title 'Nudge round trip' --date 2026-09-09 --sources '2026-W35, 2026-W36' 2>&1)"
+  nudge_log_rc=$?
+  nudge_run "$INJTMP/payload.json"
+  nudge_q_b="$NUDGE_BYTES"; nudge_q_rc=$NUDGE_RC; nudge_q_out="$NUDGE_OUT"
+  if [[ $nudge_log_rc -eq 0 && $nudge_q_rc -eq 0 && "$nudge_q_b" == "0" \
+        && $nudge_off_rc -eq 0 && "$nudge_off_b" == "0" && $nudge_proof -eq 1 ]]; then
+    pass "nudge: goes quiet once logged, and honours MEMORY_WIKI_NO_NUDGE"
+  else
+    fail "nudge: goes quiet once logged, and honours MEMORY_WIKI_NO_NUDGE" \
+      "wiki-log.sh: rc=$nudge_log_rc  $nudge_log
+after logging both:   rc=$nudge_q_rc bytes=$nudge_q_b out=[$nudge_q_out]
+MEMORY_WIKI_NO_NUDGE: rc=$nudge_off_rc bytes=$nudge_off_b out=[$nudge_off_out]
+emitting run rendered the header and a week name: $nudge_proof (must be 1, or 'silent' proves nothing)"
+  fi
+
   rm -rf "$INJPDIR"
 fi
 rm -rf "$INJPROJ" "$INJTMP"
@@ -1110,6 +1374,13 @@ rm -rf "$INJPROJ" "$INJTMP"
 # does not begin with the literal ${CLAUDE_PLUGIN_ROOT}/ is never expanded and the hook dies at
 # load time with "Shell substitution failed ... (detail withheld)"; and a SessionStart matcher
 # that does not name wiki-inject.sh means the whole read half of memory-wiki never runs.
+#
+# BOTH SessionStart entries are required by name. They are two entries rather than one script
+# doing both jobs because their outputs and their failure modes are unrelated, and a bug in the
+# pending calculation must not be able to suppress the index injection — claude-memory
+# registers its own two the same way. A manifest that quietly lost one of them would still
+# satisfy every other assertion here, and the loss shows up at session start as nothing
+# happening, which is also what a project with no wiki looks like.
 #
 # The count assertion is load-bearing, not decoration. "*Every* command starts with
 # ${CLAUDE_PLUGIN_ROOT}/" is vacuously true of a manifest that parses to {} — which is exactly
@@ -1124,7 +1395,7 @@ for event, matchers in sorted(d.get('hooks', {}).items()):
         for h in m.get('hooks', []):
             print('%s\t%s\t%s' % (event, h.get('command',''), h.get('statusMessage','')))
 " "$HOOKSJSON" 2>&1)"; hooks_rc=$?
-hooks_bad=""; hooks_n=0; hooks_inject=0
+hooks_bad=""; hooks_n=0; hooks_inject=0; hooks_nudge=0
 if [[ $hooks_rc -ne 0 || -z "$hooks_dump" ]]; then
   hooks_bad="hooks.json did not parse into any hook command (rc=$hooks_rc):
 $hooks_dump"
@@ -1141,16 +1412,23 @@ else
       [[ -n "$hk_status" ]] || hooks_bad="$hooks_bad
       SessionStart wiki-inject.sh has no statusMessage"
     fi
+    if [[ "$hk_event" == "SessionStart" && "$hk_cmd" == *'/bin/wiki-nudge.sh' ]]; then
+      hooks_nudge=1
+      [[ -n "$hk_status" ]] || hooks_bad="$hooks_bad
+      SessionStart wiki-nudge.sh has no statusMessage"
+    fi
   done <<< "$hooks_dump"
   (( hooks_n > 0 )) || hooks_bad="$hooks_bad
       no hook commands declared at all"
   (( hooks_inject )) || hooks_bad="$hooks_bad
       no SessionStart command ending in /bin/wiki-inject.sh"
+  (( hooks_nudge )) || hooks_bad="$hooks_bad
+      no SessionStart command ending in /bin/wiki-nudge.sh"
 fi
 if [[ -z "$hooks_bad" ]]; then
-  pass "hooks: SessionStart declares wiki-inject with \${CLAUDE_PLUGIN_ROOT} ($hooks_n command(s))"
+  pass "hooks: SessionStart declares wiki-inject and wiki-nudge with \${CLAUDE_PLUGIN_ROOT} ($hooks_n command(s))"
 else
-  fail "hooks: SessionStart declares wiki-inject with \${CLAUDE_PLUGIN_ROOT}" "$hooks_bad"
+  fail "hooks: SessionStart declares wiki-inject and wiki-nudge with \${CLAUDE_PLUGIN_ROOT}" "$hooks_bad"
 fi
 
 # --- smoke: run against a real memory dir if one exists ---
