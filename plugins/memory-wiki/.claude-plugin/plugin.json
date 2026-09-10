@@ -1,6 +1,6 @@
 {
   "name": "memory-wiki",
-  "description": "Turns claude-memory's flat Tier-3 concepts into a cross-linked, searchable wiki. Phase 1: lint audits an existing memory dir for broken wikilinks, orphan pages, and missing frontmatter; init scaffolds the wiki layer. Reads what claude-memory writes and never modifies it.",
+  "description": "Turns claude-memory's weekly rollups and flat Tier-3 concepts into a cross-linked, searchable wiki. init scaffolds the wiki layer; ingest distils the un-ingested rollups and inbox captures into typed pages, regenerates the index and appends the append-only ledger; one SessionStart hook puts that index (a symptom lookup and a component map) in front of the model at every session start, and a second reminds you when rollups are still un-ingested; lint audits broken wikilinks, orphan pages, missing frontmatter and schema errors, and reports without ever fixing. Reads what claude-memory writes and never modifies it, and never deletes anything.",
   "version": "0.4.0",
   "author": { "name": "Eduardo Souza" },
   "license": "MIT"
