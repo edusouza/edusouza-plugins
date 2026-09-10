@@ -61,12 +61,23 @@ recurrence evidence only *within* each step:
    more. A failure that belongs to the platform is homed on the `tech_` page instead.
 4. Whatever slots remain: the strongest-recurrence `component_` and `tech_` candidates.
 
+These four steps allocate a budget; they do not resolve a shortage. When steps 2 and 3 together
+want more slots than remain, a `failure_` takes a slot only if the page that will link it fits in
+the same run — so where several failures share one home, prefer them, and a failure whose only
+home would not fit waits for the next run. Deferring a failure costs one run's reachability;
+writing one with no home costs an orphan, which this skill's own lint gate rejects.
+
 On a first ingest this will feel wrong, because the scaffolding is what makes a wiki look
 finished. It is not what makes it useful. A wiki whose first run holds every component and none of
 its recurring failures has inverted its own priorities.
 
-Nothing is lost, whatever the run leaves out: the rollups are immutable, and the next run reads the
-same material with the same tests.
+**What the run leaves out is not preserved by waiting.** `bin/wiki-ingest-plan.sh` treats a rollup
+as pending only until a `- Sources:` line in `wiki/log.md` names it, and this run's ledger entry
+logs every rollup it read under `--sources` — so once that entry is written, those weeks are no
+longer pending, and no future run re-reads them. A candidate cut here for cap reasons is not
+deferred to a quiet future re-read: it is out of the queue for good, and it comes back only if some
+*later* rollup happens to touch the same subject again — at which point the next run works from
+that new material, not from what was cut today.
 
 **Zero new pages is a correct outcome.** A quiet week produces no pages, and a run that creates
 none has still done its job if it updated `last_accessed:` and `sources:` where the week touched
@@ -171,7 +182,7 @@ Field by field:
   genuinely came from even when part of what it concluded has since been reversed, and say in the
   body which part no longer holds — a citation picked for tidiness rather than provenance turns the
   field into decoration, and decoration is the one thing `sources:` must never be.
-- **`part_of:`** — one wikilink to the owning project page: `part_of: "[[project_claude-plugins]]"`.
+- **`part_of:`** — one wikilink to the owning project page: `part_of: "[[project_lantern-plugins]]"`.
   It has to name a page that already exists or one the same run creates. A component pointing at a
   project page nobody wrote is a broken link and an unattached component in a single line.
 - **`superseded_by:`** — one wikilink to the page that replaced this one:
@@ -196,24 +207,34 @@ unreachable by the one query that would have found it.
 So quote it from the source, in the words the machine used, not in the words you would use to
 describe it afterwards:
 
-- `symptom: "Hook cancelled"` — right. It is what is on screen, so it matches.
-- `symptom: "the hook was cancelled"` — useless. Nobody types that, and it appears nowhere in any
-  output.
+- `symptom: "Invalid SOS parameters for sequential JPEG"` — right. It is what is on screen, so it
+  matches.
+- `symptom: "the JPEG decoder choked on a malformed file"` — useless. Nobody types that, and it
+  appears nowhere in any output.
 
 **When the defect produces no output at all**, there is nothing to quote and the rule above does
 not apply. Quote instead the shortest description of the observable wrong state, and prefer the
 words the person who hit it actually used — from the rollup — over words you compose now: those
 are the words the next person will use too. Mark it so the reader knows there is no string to
-paste: `symptom: "(no error) plugin loads at its old version after a bump"`. In the body,
+paste: `symptom: "(no error) thumbnails keep the old aspect ratio after the crop pipeline changes it"`.
+In the body,
 `## Symptom` then describes the state in prose and **does not** open a fenced block: a fence
 asserts terminal output, and asserting output that does not exist sends the next reader hunting a
 log line that was never printed. If you cannot write even the wrong-state phrase, the material is
 a `## Decisions` entry, not a `failure_` page.
 
+`(no error)` is a last resort, not one of two shapes to choose between. It applies only when
+*nothing* in the cluster prints anything. If any face of the same defect produces a literal
+string — even a rarer face, even one this page treats as adjacent — quote that string and append
+the discriminator, exactly as below. A `(no error)` line cannot match a paste, so it does a Map
+entry's job while occupying a slot in the one section that exists to be matched against; where a
+defect has both a loud face and a silent one, the loud face is what the index line is for, and the
+silent one is what `description:` and the body are for.
+
 A symptom that is verbatim but generic — a string the tool prints in many unrelated situations —
 costs the index a false match on every unrelated hit. Keep the quoted string first so it still
 matches a paste, then append the discriminator that makes it *this* defect:
-`symptom: "Prompt is too long — written into a weekly rollup as its whole body"`.
+`symptom: "Premature end of JPEG file — thumbnail worker hit a proxy timeout, not a corrupt upload"`.
 
 Keep it to one line. Trim only the parts that could never match twice — absolute home paths,
 process ids, timestamps, hashes — and keep the shape where you trim: `Cannot open /home/<user>/…`
@@ -321,6 +342,10 @@ are held to exactly the same bar as Tier 3:
 
 - **Refer to people by role**, never by name, email address, handle, or account id. "The user",
   "the reviewer", "the maintainer", "the reporter".
+- **An artifact identifier is not a personal reference.** A package, marketplace, repository, or
+  account name that a reader would need to type verbatim to find the thing is written out in full,
+  even when it embeds a handle. The rule above is about referring to *people*, not about censoring
+  the names of things.
 - **No secrets, ever.** Keys, tokens, passwords, connection strings, cookies, signed URLs, or
   anything shaped like one. When an error message embeds a credential, quote the error and mask the
   credential.
@@ -444,7 +469,7 @@ description: the three-tier cross-session memory plugin — how its consolidatio
 type: component
 status: active
 last_accessed: 2026-09-08
-part_of: "[[project_claude-plugins]]"
+part_of: "[[project_lantern-plugins]]"
 sources: ["[[2026-W27]]", "[[2026-W31]]"]
 ---
 Owns this project's memory: Tier 1 session notes, Tier 2 weekly rollups under
@@ -478,7 +503,7 @@ Owns this project's memory: Tier 1 session notes, Tier 2 weekly rollups under
 ````
 
 **`part_of:` must name a page that already exists, or one the same run creates.** The exemplar
-points at `[[project_claude-plugins]]` to show the shape of the field, and there is no such page
+points at `[[project_lantern-plugins]]` to show the shape of the field, and there is no such page
 here to point at — copy that line into a real wiki and you get a broken link plus a component
 attached to nothing. Write the `project_` page first, or point `part_of:` at the project page that
 is already there. The same caution applies to every other `[[link]]` in both exemplars: they
