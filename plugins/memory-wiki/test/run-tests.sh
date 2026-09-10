@@ -199,7 +199,9 @@ want: $want"
 claude-memory: $cm_got"
     fi
   else
-    pass "paths: claude-memory not installed, cross-check skipped"
+    # Not `pass`. A skip is absent coverage, and reporting it as a pass both inflates the
+    # total and hides the absence. See the SKIP below the Windows-cwd check for the full note.
+    echo "SKIP: paths: agrees with claude-memory's resolver (claude-memory not installed)"
   fi
 else
   fail "paths: _wiki-paths.sh" "wiki_project_dir not defined"
@@ -637,7 +639,10 @@ if command -v pwsh >/dev/null 2>&1; then
 $ps_conc"
   fi
 else
-  pass "parity: skipped (pwsh not on PATH)"
+  # Not `pass`. Nine parity assertions plus the -Concepts check collapse into this one line the
+  # moment pwsh leaves PATH, and calling that a pass inflates the total by ten while hiding
+  # that the entire PowerShell twin went unrun. See the SKIP below the Windows-cwd check.
+  echo "SKIP: parity: the whole PowerShell twin suite (pwsh not on PATH)"
 fi
 
 # --- shipped surface: every declared file exists and has content ---
@@ -1001,20 +1006,30 @@ $(diff <(echo "$inj_emit_out") <(echo "$INJ_OUT") || true)"
   mkdir -p "$INJWIKI/index.md"
   inj_run "$INJTMP/payload.json"; inj_d_out="$INJ_OUT"; inj_d_rc=$INJ_RC
   rmdir "$INJWIKI/index.md"
-  inj_f_out=""; inj_f_rc=0
+  # inj_f_ran, not pre-set inj_f_rc=0/inj_f_out="": with the FIFO setup unavailable those two
+  # defaults satisfy the assertion below on their own, so the check reported a pass for a half
+  # that never ran. The dir half is unconditional, so the two halves are now reported apart.
+  inj_f_out=""; inj_f_rc=0; inj_f_ran=0
   if command -v timeout >/dev/null 2>&1 && command -v mkfifo >/dev/null 2>&1 \
      && mkfifo "$INJWIKI/index.md" 2>/dev/null; then
+    inj_f_ran=1
     inj_f_out="$(env -u CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT="$PLUGIN" \
       timeout 10 bash "$INJHOOK" < "$INJTMP/payload.json" 2>&1)"; inj_f_rc=$?
     rm -f "$INJWIKI/index.md"
   fi
   mv "$INJTMP/index.md.bak" "$INJWIKI/index.md"
-  if [[ $inj_d_rc -eq 0 && -z "$inj_d_out" && $inj_f_rc -eq 0 && -z "$inj_f_out" \
-        && $inj_emit_proof -eq 1 ]]; then
-    pass "inject: a directory or FIFO at index.md is a silent no-op"
+  if [[ $inj_d_rc -eq 0 && -z "$inj_d_out" && $inj_emit_proof -eq 1 ]]; then
+    pass "inject: a directory at index.md is a silent no-op"
   else
-    fail "inject: a directory or FIFO at index.md is a silent no-op" "dir:  rc=$inj_d_rc out=[$inj_d_out]
-fifo: rc=$inj_f_rc out=[$inj_f_out]
+    fail "inject: a directory at index.md is a silent no-op" "dir:  rc=$inj_d_rc out=[$inj_d_out]
+emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' proves nothing)"
+  fi
+  if [[ $inj_f_ran -eq 0 ]]; then
+    echo "SKIP: inject: a FIFO at index.md is a silent no-op (no timeout/mkfifo, or mkfifo refused)"
+  elif [[ $inj_f_rc -eq 0 && -z "$inj_f_out" && $inj_emit_proof -eq 1 ]]; then
+    pass "inject: a FIFO at index.md is a silent no-op"
+  else
+    fail "inject: a FIFO at index.md is a silent no-op" "fifo: rc=$inj_f_rc out=[$inj_f_out]
 emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' proves nothing)"
   fi
 
@@ -1867,7 +1882,10 @@ if [[ -n "$REAL" && -d "$REAL" ]]; then
 $out"
   fi
 else
-  pass "smoke: skipped (no memory dir on this machine)"
+  # Not `pass`. This is the only check in the suite that runs against a real corpus rather than
+  # a fixture, so reporting its absence as a pass hides exactly the coverage a fresh machine
+  # lacks. See the SKIP below the Windows-cwd check.
+  echo "SKIP: smoke: real memory dir (none on this machine)"
 fi
 
 exit "$FAILED"
