@@ -67,8 +67,8 @@ MEMDIR="$(mem_project_dir "$CWD_RAW")/memory"
       # TRIM: when a memory-wiki index already covers this same week topically, page by page,
       # everything below is a second telling of it — except `## Open threads`, which is
       # transient continuity ("still unresolved when the week ended") that no durable wiki page
-      # reproduces. So in that one case we inject that one section, capped at 60 lines, instead
-      # of 200 lines of prose the model is about to read again in the index.
+      # reproduces. So in that one case we inject that section — every occurrence of it, capped
+      # at 60 lines in total — instead of 200 lines of prose the model reads again in the index.
       #
       # The trigger is a POPULATED index, not the existence of <memdir>/wiki/: the `## Symptoms`
       # and `## Map` headings appear only when the renderer had real pages to work with, so a
@@ -92,24 +92,30 @@ MEMDIR="$(mem_project_dir "$CWD_RAW")/memory"
           fi
         done 2>/dev/null < "$MEMDIR/wiki/index.md"
         if (( WIKI_COVERS )); then
-          # From the `## Open threads` line to the next `## ` heading. A trailing CR is left on
-          # the line, so a CRLF rollup is re-emitted with its own endings; every pattern here
-          # ends in `*`, which absorbs it.
+          # EVERY `## Open threads` section, each running to the next heading that closes it,
+          # with ONE 60-line cap across all of them. Not the first section only: a week
+          # consolidated twice appends a second `# Week ...` document into the same file, and
+          # on this project's own corpus four of eight rollups are doubled — so first-only
+          # would silently drop half the open threads on half the weeks, which is exactly the
+          # continuity this exception exists to preserve.
           #
-          # The FIRST such heading, deliberately. A week consolidated twice appends a second
-          # `# Week ...` document into the same file, so ~1 rollup in 10 on a real memory dir
-          # carries two `## Open threads` sections and only the earlier one is injected here.
-          # Widening this to every section is a two-line change; it is not made because the
-          # doubled file is a consolidation artifact, and compensating for it in the reader
-          # would hide it. `CLAUDE_MEMORY_ROLLUP_FULL=1` still shows the whole file.
+          # A section is closed by the next `## ` heading OR by a `# ` h1, and an h1 is not
+          # optional: in a doubled file the separator between the two bodies IS the h1, and at
+          # least one real rollup here has no `## ` heading after its first open-threads
+          # section at all — terminating on `## ` alone would swallow the whole second document
+          # and present it as open threads. `### ` and deeper are left alone, since a
+          # subheading below a section belongs to it.
+          #
+          # A trailing CR is left on each line, so a CRLF rollup is re-emitted with its own
+          # endings; every pattern here ends in `*`, which absorbs it.
           IN_OPEN=0 RLINE=""
           while IFS= read -r RLINE || [[ -n "$RLINE" ]]; do
-            if (( IN_OPEN )); then
-              [[ "$RLINE" == '## '* ]] && break
-            elif [[ "$RLINE" == '## Open threads'* ]]; then
-              IN_OPEN=1
-            else
-              continue
+            if [[ "$RLINE" == '## Open threads'* ]]; then
+              IN_OPEN=1                       # a section opens, or the next one re-opens
+            elif (( IN_OPEN )) && [[ "$RLINE" == '## '* || "$RLINE" == '# '* ]]; then
+              IN_OPEN=0; continue             # ...and closes here
+            elif (( ! IN_OPEN )); then
+              continue                        # between sections: nothing to keep
             fi
             ROLLUP_OPEN+=( "$RLINE" )
             (( ${#ROLLUP_OPEN[@]} >= 60 )) && break

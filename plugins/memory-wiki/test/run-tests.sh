@@ -1553,6 +1553,29 @@ else
     '## Next week' 'NEXT_SECTION_MARKER' > "$CMPDIR/memory/episodic/weekly/2026-W36.md"
   cm_run "$CMPROJ"; cm_noopen_out="$CM_OUT"; cm_noopen_rc=$CM_RC
 
+  # ...and the shape half of a real corpus actually has (Ruling 25). A week consolidated twice
+  # appends a SECOND `# Week ...` document into the same file, so the rollup carries two
+  # `## Open threads` sections with a foreign body between them. Four of the eight rollups in
+  # this project's own memory dir look like this, so extracting only the first would drop half
+  # the open threads on half the weeks — silently, and in the direction the user cannot see.
+  #
+  # The separator here is an h1, deliberately, because that is what it is in every doubled file
+  # on disk: `SPLIT_H1_MARKER` absent is the assertion that an h1 closes a section. It is not
+  # cosmetic. At least one real rollup has NO `## ` heading after its first open-threads
+  # section, so a `## `-only terminator would run to end of file and present a whole second
+  # rollup body as open threads.
+  printf '%s\n' \
+    '# Week 2026-W36' '' \
+    '## Narrative' 'BULK_BODY_MARKER' '' \
+    '## Open threads' '- FIRST_THREAD_MARKER' \
+    '# Week 2026-W36 SPLIT_H1_MARKER' '' \
+    '## Summary' 'SECOND_BODY_MARKER' '' \
+    '## Open threads' '- SECOND_THREAD_MARKER' '' \
+    '## Next week' 'NEXT_SECTION_MARKER' \
+    > "$CMPDIR/memory/episodic/weekly/2026-W36.md"
+  cm_run "$CMPROJ"; cm_dbl_out="$CM_OUT"; cm_dbl_rc=$CM_RC
+  cm_dbl_n="$(grep -c '^## Open threads' <<< "$cm_dbl_out")"; cm_dbl_n="${cm_dbl_n:-0}"
+
   # --- state 3: a second project, /memory-wiki:init run and nothing ingested ---
   mkdir -p "$CMPDIR2/memory/episodic/weekly"
   cm_write_rollup "$CMPDIR2/memory/episodic/weekly/2026-W36.md"
@@ -1585,8 +1608,9 @@ $cm_nowiki_out"
   [[ $cm_gen_rc -eq 0 ]] || cm_bad="$cm_bad generator rc=$cm_gen_rc;"
   [[ $cm_idx_ok -eq 1 ]] \
     || cm_bad="$cm_bad index.md carries no ^## Symptoms/Map heading, so nothing here could have triggered the trim;"
-  [[ $cm_trim_rc -eq 0 && $cm_full_rc -eq 0 && $cm_cap_rc -eq 0 && $cm_noopen_rc -eq 0 ]] \
-    || cm_bad="$cm_bad rc trim=$cm_trim_rc full=$cm_full_rc cap=$cm_cap_rc no-open=$cm_noopen_rc;"
+  [[ $cm_trim_rc -eq 0 && $cm_full_rc -eq 0 && $cm_cap_rc -eq 0 && $cm_noopen_rc -eq 0 \
+     && $cm_dbl_rc -eq 0 ]] \
+    || cm_bad="$cm_bad rc trim=$cm_trim_rc full=$cm_full_rc cap=$cm_cap_rc no-open=$cm_noopen_rc doubled=$cm_dbl_rc;"
   # The section survives, and so does the framing that says which week it came from — a bare
   # `## Open threads` with no provenance is continuity the model cannot place.
   for needle in \
@@ -1617,6 +1641,20 @@ $cm_nowiki_out"
     [[ "$cm_noopen_out" == *"$needle"* ]] \
       || cm_bad="$cm_bad a rollup with no ## Open threads heading lost: $needle;"
   done
+  # Both sections, and both headings: the count is asserted as well as the content, because a
+  # run that concatenated the two bodies under one heading would still carry both markers.
+  for needle in '- FIRST_THREAD_MARKER' '- SECOND_THREAD_MARKER'; do
+    [[ "$cm_dbl_out" == *"$needle"* ]] \
+      || cm_bad="$cm_bad doubled rollup: only some sections injected, missing $needle;"
+  done
+  (( cm_dbl_n == 2 )) \
+    || cm_bad="$cm_bad doubled rollup injected $cm_dbl_n ## Open threads heading(s), want 2;"
+  # ...and nothing that lies BETWEEN or AFTER them. SPLIT_H1_MARKER is the h1-terminator
+  # assertion; SECOND_BODY_MARKER would appear too if the h1 failed to close section one.
+  for needle in 'BULK_BODY_MARKER' 'SPLIT_H1_MARKER' 'SECOND_BODY_MARKER' 'NEXT_SECTION_MARKER'; do
+    [[ "$cm_dbl_out" != *"$needle"* ]] \
+      || cm_bad="$cm_bad doubled rollup injected foreign content: $needle;"
+  done
   if [[ -z "$cm_bad" ]]; then
     pass "interop: populated wiki -> only Open threads, and ROLLUP_FULL restores the dump"
   else
@@ -1628,7 +1666,9 @@ $cm_full_out
 --- 80-line Open threads ($cm_cap_n thread lines injected) ---
 $cm_cap_out
 --- rollup with no ## Open threads heading ---
-$cm_noopen_out"
+$cm_noopen_out
+--- doubled rollup ($cm_dbl_n ## Open threads heading(s) injected) ---
+$cm_dbl_out"
   fi
 
   # Check 3. /memory-wiki:init and no ingest: the user would otherwise lose the rollup and

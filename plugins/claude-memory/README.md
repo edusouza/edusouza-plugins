@@ -74,10 +74,11 @@ likewise moved off exit onto the `Stop` nudge.
 By default the `SessionStart` recall injects up to 200 lines of the latest weekly rollup. If
 [memory-wiki](../memory-wiki) has been initialized **and actually ingested** for the project — its
 `memory/wiki/index.md` carries a rendered `## Symptoms` or `## Map` heading — that rollup is now
-duplicated topically, page by page, so only its `## Open threads` section is injected (capped at 60
-lines); open threads are transient continuity that no durable wiki page reproduces. **With no wiki,
-or with one scaffolded but never ingested, nothing changes** and the full dump is printed exactly as
-before. `CLAUDE_MEMORY_ROLLUP_FULL=1` restores the full dump in every case.
+duplicated topically, page by page, so only its `## Open threads` sections are injected (every
+occurrence, capped at 60 lines in total); open threads are transient continuity that no durable wiki
+page reproduces. A week consolidated twice carries two of these sections, and both are kept.
+**With no wiki, or with one scaffolded but never ingested, nothing changes** and the full dump is
+printed exactly as before. `CLAUDE_MEMORY_ROLLUP_FULL=1` restores the full dump in every case.
 
 ## Install (local development)
 
