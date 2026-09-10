@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # SessionStart injection of the memory wiki index — the read half of memory-wiki.
 #
-# Reads the hook payload JSON on stdin, takes its `cwd`, resolves that project's memory dir
-# worktree-aware, and prints the managed region of <memdir>/wiki/index.md followed by the
-# cross-project atlas region. Nothing decides whether to do this: the index is in front of
-# the model at every session start, and the model reads a page only when a line in that index
-# matches what it is doing. The index line IS the affordance.
+# Takes the session's cwd — the CLAUDE_PROJECT_DIR Claude Code exports, falling back to the
+# `cwd` in the hook payload JSON on stdin — resolves that project's memory dir worktree-aware,
+# and prints the managed region of <memdir>/wiki/index.md followed by the cross-project atlas
+# region. Nothing decides whether to do this: the index is in front of the model at every
+# session start, and the model reads a page only when a line in that index matches what it is
+# doing. The index line IS the affordance.
 #
 # THIS IS THE ONLY INJECTOR OF THE INDEX REGION (plan decision D-a). wiki-index.py writes a
 # two-line *pointer* into MEMORY.md — the wiki's path and a one-line "read the index there" —
@@ -17,14 +18,18 @@
 # PERFORMANCE. This blocks *every* session start, and on this machine a process spawn costs
 # ~430 ms measured (50 grep spawns took 21.5 s). So: bash builtins over subprocesses,
 # parameter expansion over sed, one `while read` pass over a file rather than an awk or a grep
-# per candidate, and the memory dir resolved exactly once and reused. The budget is 9
-# processes, measured, and test/run-tests.sh pins it with a PATH shim that logs every call:
-#   1  python, to parse the payload JSON (this hook's whole job is to resolve the memory dir
-#      from the payload's cwd, so there is no CLAUDE_PROJECT_DIR shortcut past it)
-#   7  inside wiki_project_dir  (cygpath -u, three git rev-parse, dirname, cygpath -w, sed)
-#   1  cygpath -m, to name the wiki in the header — and only when a section is printed
-# The two opt-out guards are the first two statements in the file so that a suppressed session
-# start costs zero processes, not nine.
+# per candidate, and the memory dir resolved exactly once and reused. Budgets, measured, both
+# pinned by test/run-tests.sh with a PATH shim that logs every call:
+#   1  when Claude Code exported CLAUDE_PROJECT_DIR — one `git rev-parse` inside
+#      wiki_project_dir, and nothing else. The python that would parse the payload is skipped
+#      entirely, and it is the most expensive spawn in the set (memory-inject.sh measures
+#      python at 1.1 s on Windows).
+#   2  without it (non-Claude hosts): that git, plus that python.
+#   0  when either opt-out is set — the two guards are the first statements in the file.
+# Region extraction and the mixed-form path conversion are bash builtins and cost nothing.
+#
+# This was 9 before _wiki-paths.sh was re-vendored from claude-memory 0.3.5; see that file's
+# header for the resolver bug that cost the other seven.
 #
 # Silent, exit 0, always. A hook that errors visibly at session start is worse than one that
 # no-ops, and every one of these is a normal state rather than a fault: the recursion guard,
@@ -58,25 +63,37 @@ declare -f wiki_project_dir >/dev/null 2>&1 || exit 0
 # `read -d ''` consumes the whole stream with a builtin; `$(cat)` would cost a process. The
 # tty guard keeps a hand-run of this script from hanging on a terminal that will never send
 # anything — a no-op is the right answer there too.
+#
+# stdin is drained here even on the path that turns out not to need it: leaving the payload
+# unread would make Claude Code's writer take an EPIPE, and draining it costs nothing.
 PAYLOAD=""
 if [[ ! -t 0 ]]; then
   IFS= read -r -d '' PAYLOAD || true
 fi
-[[ -z "$PAYLOAD" ]] && exit 0
 
-PYBIN=""
-if command -v python >/dev/null 2>&1; then
-  PYBIN="python"
-elif command -v python3 >/dev/null 2>&1; then
-  PYBIN="python3"
-else
-  exit 0
-fi
+# Prefer the cwd Claude Code already exported, exactly as claude-memory's memory-inject.sh
+# does, and only pay for python to parse the payload when it is absent (non-Claude hosts).
+# Both land on the same memory dir: wiki_project_dir maps a repo root, any subdirectory of
+# it, and any linked worktree of it to one and the same main-worktree root. This is not a
+# corner: python is the most expensive spawn this hook can make, and on a normal Claude Code
+# session start it is now never made at all.
+CWD="${CLAUDE_PROJECT_DIR:-}"
+if [[ -z "$CWD" ]]; then
+  [[ -z "$PAYLOAD" ]] && exit 0
 
-# Every malformed shape lands on the empty string and therefore on a silent exit: not JSON,
-# JSON that is not an object, an object with no `cwd`, a null `cwd`. A here-string rather
-# than a pipe, so this costs one process and not one process plus a forked writer.
-CWD="$("$PYBIN" -c '
+  PYBIN=""
+  if command -v python >/dev/null 2>&1; then
+    PYBIN="python"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYBIN="python3"
+  else
+    exit 0
+  fi
+
+  # Every malformed shape lands on the empty string and therefore on a silent exit: not JSON,
+  # JSON that is not an object, an object with no `cwd`, a null `cwd`. A here-string rather
+  # than a pipe, so this costs one process and not one process plus a forked writer.
+  CWD="$("$PYBIN" -c '
 import sys, json
 try:
     d = json.loads(sys.stdin.read())
@@ -85,7 +102,8 @@ try:
         sys.stdout.write(v)
 except Exception:
     pass' <<< "$PAYLOAD" 2>/dev/null || true)"
-CWD="${CWD%$'\r'}"
+  CWD="${CWD%$'\r'}"
+fi
 [[ -z "$CWD" ]] && exit 0
 
 # Worktree-aware, and resolved exactly once: a linked worktree shares the MAIN repo's memory
@@ -122,8 +140,13 @@ WIKI_EMPTY='(no pages yet — run /memory-wiki:ingest)'
 REGION=""
 extract_region() {           # extract_region <file>  -> sets REGION ("" when there is none)
   REGION=""
-  local file="${1:-}" line t buf="" inside=0 closed=0
-  [[ -n "$file" && -r "$file" ]] || return 0
+  local file="${1:-}" line="" t="" buf="" inside=0 closed=0
+  # -f, not -r. `-r` is true of a *directory* at this path, and the redirect below then
+  # fails, leaving `line` unassigned for the `[[ -n "$line" ]]` that follows — which trips
+  # `set -u` and exits 1 with two bash errors visible at session start, the exact thing this
+  # hook must never do. A FIFO passes `-r` too and would block the read forever. `line` is
+  # initialised as well so no future path can reach that test unassigned either.
+  [[ -n "$file" && -f "$file" && -r "$file" ]] || return 0
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
     t="${line#"${line%%[![:space:]]*}"}"    # strip leading whitespace
@@ -156,10 +179,15 @@ extract_region "$ATLAS_DIR/index.md"; ATLAS_REGION="$REGION"
 [[ -z "$PROJ_REGION" && -z "$ATLAS_REGION" ]] && exit 0
 
 # Mixed form (C:/foo/bar) is what the model needs to open the file on Windows, and it is
-# harmless everywhere else. Called only for a section that is actually being printed, so an
-# empty atlas costs nothing.
+# harmless everywhere else. wiki_to_mixed is the vendored pure-bash conversion — the sibling
+# documents it as "the shape `cygpath -m` produced" — so this costs no process. `cygpath -m`
+# remains the fallback for one specific reason rather than as decoration: a stale plugin cache
+# can leave an older _wiki-paths.sh on disk that predates wiki_to_mixed, and that is a
+# documented failure mode in this repo, not a hypothetical.
 mixed_path() {
-  if command -v cygpath >/dev/null 2>&1; then
+  if declare -f wiki_to_mixed >/dev/null 2>&1; then
+    wiki_to_mixed "$1"
+  elif command -v cygpath >/dev/null 2>&1; then
     cygpath -m "$1" 2>/dev/null || printf '%s' "$1"
   else
     printf '%s' "$1"

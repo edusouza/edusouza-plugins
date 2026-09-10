@@ -695,10 +695,20 @@ printf '{"hook_event_name":"SessionStart"}' > "$INJTMP/nocwd.json"
 # inj_run <payload-file> [VAR=val ...]  -> sets INJ_OUT (stdout+stderr) and INJ_RC.
 # stderr is captured deliberately: a hook must be silent on *both* streams at session start.
 # Deliberately NOT called via $(...) — that would run it in a subshell and discard INJ_OUT.
+#
+# Two variables are pinned rather than inherited, because the suite is itself run from inside
+# a Claude Code session that exports both:
+#   CLAUDE_PLUGIN_ROOT — inherited, the hook would locate its bin/ through the *installed*
+#     plugin and every check below would silently exercise the cache instead of this checkout.
+#   CLAUDE_PROJECT_DIR — the hook now prefers it over the payload's cwd (that is the point of
+#     the shortcut), so inheriting it would resolve every check onto the real repo instead of
+#     the throwaway project, and would make "unparseable payload is a silent no-op" test
+#     nothing at all. The shortcut gets its own check below, which sets it deliberately.
 INJ_OUT=""; INJ_RC=0
 inj_run() {
   local pf="$1"; shift
-  INJ_OUT="$(env "$@" bash "$INJHOOK" < "$pf" 2>&1)"; INJ_RC=$?
+  INJ_OUT="$(env -u CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" \
+    bash "$INJHOOK" < "$pf" 2>&1)"; INJ_RC=$?
 }
 
 if [[ -z "$INJPDIR" ]]; then
@@ -708,32 +718,27 @@ dir or already exists; refusing to scaffold into it or delete it. Check \$TMPDIR
 else
   INJWIKI="$INJPDIR/memory/wiki"
 
+  # These two run first because they need the wiki *absent*, but they are only reported far
+  # below, after inj_emit_proof exists. Asserting them here would leave the suite's two
+  # earliest silence checks with nothing but "rc 0 and no output" behind them — which
+  # separates a crash from silence but not silence-by-accident: a DIR mis-resolution that
+  # trips the `declare -f wiki_project_dir` bail in the hook satisfies both, and so does a
+  # hook replaced wholesale by `exit 0`.
+  #
   # Two shapes of "no wiki": no project memory dir at all, and a memory-enabled project
   # that never ran /memory-wiki:init.
   inj_run "$INJTMP/payload.json"; inj_a_out="$INJ_OUT"; inj_a_rc=$INJ_RC
   mkdir -p "$INJPDIR/memory"
   inj_run "$INJTMP/payload.json"; inj_b_out="$INJ_OUT"; inj_b_rc=$INJ_RC
-  if [[ $inj_a_rc -eq 0 && $inj_b_rc -eq 0 && -z "$inj_a_out" && -z "$inj_b_out" ]]; then
-    pass "inject: silent and exits 0 with no wiki"
-  else
-    fail "inject: silent and exits 0 with no wiki" "no memory dir: rc=$inj_a_rc out=[$inj_a_out]
-no wiki dir:   rc=$inj_b_rc out=[$inj_b_out]"
-  fi
 
   # A freshly scaffolded wiki holds nothing but the empty-wiki placeholder, and a section
   # header over "there is nothing here" is worse than no section. This is also the only
   # "both regions empty" case reachable without a fake atlas, since $HOME/.claude/memory-wiki
-  # exists on no machine until Phase 4. The -f guard distinguishes "suppressed the placeholder"
-  # from "wiki-init.sh silently wrote no index.md at all".
+  # exists on no machine until Phase 4. The -f capture distinguishes "suppressed the
+  # placeholder" from "wiki-init.sh silently wrote no index.md at all".
   bash "$PLUGIN/bin/wiki-init.sh" "$INJPROJ" >/dev/null 2>&1
-  inj_run "$INJTMP/payload.json"
-  if [[ $INJ_RC -eq 0 && -z "$INJ_OUT" && -f "$INJWIKI/index.md" ]]; then
-    pass "inject: a wiki rendering only the empty-wiki placeholder is suppressed"
-  else
-    fail "inject: a wiki rendering only the empty-wiki placeholder is suppressed" \
-      "rc=$INJ_RC  index.md present: $([[ -f "$INJWIKI/index.md" ]] && echo yes || echo NO)
-out=[$INJ_OUT]"
-  fi
+  inj_run "$INJTMP/payload.json"; inj_ph_out="$INJ_OUT"; inj_ph_rc=$INJ_RC
+  inj_ph_idx=0; [[ -f "$INJWIKI/index.md" ]] && inj_ph_idx=1
 
   # The non-silent path, and the only check in the block that proves the hook can speak.
   # Real pages, the real generator, the real hook.
@@ -768,6 +773,24 @@ $inj_emit_out"
   inj_emit_proof=0
   [[ "$inj_emit_out" == *'demo: fatal: cannot open state file'* ]] && inj_emit_proof=1
 
+  # The two runs held back from above, now that there is something to gate them on.
+  if [[ $inj_a_rc -eq 0 && $inj_b_rc -eq 0 && -z "$inj_a_out" && -z "$inj_b_out" \
+        && $inj_emit_proof -eq 1 ]]; then
+    pass "inject: silent and exits 0 with no wiki"
+  else
+    fail "inject: silent and exits 0 with no wiki" "no memory dir: rc=$inj_a_rc out=[$inj_a_out]
+no wiki dir:   rc=$inj_b_rc out=[$inj_b_out]
+emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' proves nothing)"
+  fi
+  if [[ $inj_ph_rc -eq 0 && -z "$inj_ph_out" && $inj_ph_idx -eq 1 \
+        && $inj_emit_proof -eq 1 ]]; then
+    pass "inject: a wiki rendering only the empty-wiki placeholder is suppressed"
+  else
+    fail "inject: a wiki rendering only the empty-wiki placeholder is suppressed" \
+      "rc=$inj_ph_rc  index.md present: $inj_ph_idx  out=[$inj_ph_out]
+emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' proves nothing)"
+  fi
+
   # Both switches, checked against the wiki that just produced output — so this pins the
   # suppression itself, not an index that had nothing in it either way.
   inj_run "$INJTMP/payload.json" MEMORY_WIKI_NO_INJECT=1;       inj_n_out="$INJ_OUT"; inj_n_rc=$INJ_RC
@@ -800,14 +823,61 @@ emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' prove
 
   # No python at all. Everything the hook touches before the interpreter probe is either a
   # bash builtin or a `.` of a sibling file, so emptying PATH is enough to hide python without
-  # disturbing anything else — bash is invoked by absolute path for exactly that reason. This
-  # is the last of the brief's silent-exit conditions and the only one with no other coverage.
-  INJ_OUT="$(env PATH="$INJTMP/no-such-bin" "${BASH:-bash}" "$INJHOOK" \
+  # disturbing anything else — bash is invoked by absolute path for exactly that reason.
+  # CLAUDE_PROJECT_DIR must be unset here or the hook never reaches the interpreter probe at
+  # all, and this would quietly stop testing anything.
+  INJ_OUT="$(env -u CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT="$PLUGIN" \
+    PATH="$INJTMP/no-such-bin" "${BASH:-bash}" "$INJHOOK" \
     < "$INJTMP/payload.json" 2>&1)"; INJ_RC=$?
   if [[ $INJ_RC -eq 0 && -z "$INJ_OUT" && $inj_emit_proof -eq 1 ]]; then
     pass "inject: no python runtime is a silent no-op"
   else
     fail "inject: no python runtime is a silent no-op" "rc=$INJ_RC out=[$INJ_OUT]
+emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' proves nothing)"
+  fi
+
+  # The CLAUDE_PROJECT_DIR shortcut, which is what makes the python spawn avoidable on a real
+  # Claude Code session start. Driven with a payload whose cwd is deliberately unusable, so a
+  # pass can only mean the exported variable was preferred — and the output must be identical
+  # to the payload-driven run, since both resolve through the same wiki_project_dir.
+  printf '{"cwd":"","hook_event_name":"SessionStart"}' > "$INJTMP/blankcwd.json"
+  INJ_OUT="$(env CLAUDE_PROJECT_DIR="$INJPROJ" CLAUDE_PLUGIN_ROOT="$PLUGIN" \
+    bash "$INJHOOK" < "$INJTMP/blankcwd.json" 2>&1)"; INJ_RC=$?
+  if [[ $INJ_RC -eq 0 && "$INJ_OUT" == "$inj_emit_out" && $inj_emit_proof -eq 1 ]]; then
+    pass "inject: CLAUDE_PROJECT_DIR is preferred over the payload cwd"
+  else
+    fail "inject: CLAUDE_PROJECT_DIR is preferred over the payload cwd" "rc=$INJ_RC
+$(diff <(echo "$inj_emit_out") <(echo "$INJ_OUT") || true)"
+  fi
+
+  # A directory — or a FIFO — sitting where index.md belongs. Both satisfy `-r`, and reading
+  # one through the region extractor's redirect leaves its loop variable unassigned, which
+  # under `set -u` exits 1 with two bash errors printed at session start. That is a direct
+  # violation of the global constraint that a hook exits 0 unconditionally and stays silent,
+  # so it is pinned rather than left to inspection.
+  #
+  # The FIFO run is wrapped in `timeout`, and not as a formality: the failure it guards
+  # against is an unbounded block, so without a bound a regression would hang this suite
+  # forever instead of reporting. rc 124 is timeout's "still running", and it fails the check
+  # like any other non-zero. Both halves are skipped only if their setup cannot be performed.
+  mv "$INJWIKI/index.md" "$INJTMP/index.md.bak"
+  mkdir -p "$INJWIKI/index.md"
+  inj_run "$INJTMP/payload.json"; inj_d_out="$INJ_OUT"; inj_d_rc=$INJ_RC
+  rmdir "$INJWIKI/index.md"
+  inj_f_out=""; inj_f_rc=0
+  if command -v timeout >/dev/null 2>&1 && command -v mkfifo >/dev/null 2>&1 \
+     && mkfifo "$INJWIKI/index.md" 2>/dev/null; then
+    inj_f_out="$(env -u CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT="$PLUGIN" \
+      timeout 10 bash "$INJHOOK" < "$INJTMP/payload.json" 2>&1)"; inj_f_rc=$?
+    rm -f "$INJWIKI/index.md"
+  fi
+  mv "$INJTMP/index.md.bak" "$INJWIKI/index.md"
+  if [[ $inj_d_rc -eq 0 && -z "$inj_d_out" && $inj_f_rc -eq 0 && -z "$inj_f_out" \
+        && $inj_emit_proof -eq 1 ]]; then
+    pass "inject: a directory or FIFO at index.md is a silent no-op"
+  else
+    fail "inject: a directory or FIFO at index.md is a silent no-op" "dir:  rc=$inj_d_rc out=[$inj_d_out]
+fifo: rc=$inj_f_rc out=[$inj_f_out]
 emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' proves nothing)"
   fi
 
@@ -829,7 +899,10 @@ rc=$INJ_RC
 $(diff <(echo "$inj_emit_out") <(echo "$INJ_OUT") || true)"
     fi
   else
-    pass "inject: Windows-style cwd check skipped (no cygpath)"
+    # Not `pass`. A skip is absent coverage, and reporting it as a pass both inflates the
+    # total and hides the absence — the same shape as this harness's false-pass history.
+    # claude-memory's suite spells an unrunnable check this way for the same reason.
+    echo "SKIP: inject: Windows-style cwd check (no cygpath on this machine)"
   fi
 
   # --- the atlas half ---
@@ -883,9 +956,10 @@ $inj_at_full"
   # than a wall-clock number that would be flaky. On this machine a spawn costs ~430 ms — 50
   # of them measured 21.5 s — and this hook blocks *every* session start.
   #
-  # CLAUDE_PLUGIN_ROOT is exported because Claude Code sets it, and the hook's fallback for
-  # locating its own bin/ is pure parameter expansion precisely so that it costs nothing
-  # either way; leaving it unset here would measure a path production never takes.
+  # CLAUDE_PLUGIN_ROOT is exported because Claude Code sets it, and because it also pins the
+  # hook to *this checkout* rather than the installed plugin. CLAUDE_PROJECT_DIR is unset for
+  # the payload-path measurement and set only for the fast-path one below, so each number
+  # belongs to a named entry path instead of to whatever the surrounding session exported.
   INJSHIM="$(mktemp -d)"
   INJLOG="$INJSHIM/calls.log"; : > "$INJLOG"
   for bin in git cygpath sed awk grep tr wc cat head tail cut python python3 \
@@ -907,29 +981,33 @@ EOF
   inj_count_spawns() {
     local pf="$1"; shift
     : > "$INJLOG"
-    INJ_SPAWN_OUT="$( PATH="$INJSHIM:$PATH"; env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" \
-      bash "$INJHOOK" < "$pf" 2>/dev/null )"
+    INJ_SPAWN_OUT="$( PATH="$INJSHIM:$PATH"; env -u CLAUDE_PROJECT_DIR \
+      CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" bash "$INJHOOK" < "$pf" 2>/dev/null )"
     INJ_SPAWNS="$(wc -l < "$INJLOG" | tr -d ' ')"
   }
 
-  # Budget, enumerated from the shim's own log rather than guessed:
-  #   1  python    parse the payload JSON — the hook's whole job is to resolve the memory dir
-  #                from the payload's cwd, so there is no environment shortcut past it
-  #   7  inside wiki_project_dir: cygpath -u, three git rev-parse, dirname, cygpath -w, sed
-  #   1  cygpath -m  to name the wiki in the section header
-  # Region extraction is a bash `while read` loop and costs nothing at all; the awk
+  # Two budgets, both enumerated from the shim's own log rather than guessed, because the hook
+  # has two entry paths and production takes the cheaper one:
+  #
+  #   payload path (CLAUDE_PROJECT_DIR unset, non-Claude hosts) — 2 processes
+  #     1  git      one `rev-parse` inside wiki_project_dir answers every question it has
+  #     1  python   parse the payload JSON for its cwd
+  #
+  #   fast path (CLAUDE_PROJECT_DIR exported, every real Claude Code session) — 1 process
+  #     the git above; python is skipped entirely, and it is the most expensive spawn in the
+  #     set (memory-inject.sh measures python at 1.1 s on Windows)
+  #
+  # Everything else is a bash builtin: region extraction is a `while read` loop, and the
+  # mixed-form path conversion is wiki_to_mixed rather than a `cygpath -m`. The awk
   # wiki-lint.sh uses to measure the same region would be one spawn per file, two more here.
   #
-  # The `dirname` is worth naming because it is not obvious: on Windows, `git rev-parse
-  # --absolute-git-dir` answers in mixed form (C:/…) while --git-common-dir resolves to POSIX
-  # form (/c/…), so wiki_resolve_main_root's string comparison reads *every* git repo as a
-  # linked worktree and takes the dirname branch. It still returns the right root — for a main
-  # worktree dirname(<root>/.git) is <root> — but it costs a process every time.
-  #
-  # None of wiki_project_dir's seven are this task's to cut: it is the shared vendored
-  # resolver every other memory-wiki entry point uses, and forking it here so the hook is
-  # faster is precisely how a project's memory and its wiki end up in different directories.
-  INJ_BUDGET=9
+  # This was 9 until the vendored _wiki-paths.sh was re-vendored from claude-memory 0.3.5:
+  # its pre-fda1203 wiki_resolve_main_root compared `rev-parse --absolute-git-dir` against
+  # `--git-common-dir`, which come back in different notations on Windows (C:/… vs /c/…), so
+  # the comparison never matched, every in-repo cwd took the redirect branch, and the detour
+  # cost three git calls plus a dirname where one rev-parse does. See that file's header.
+  INJ_BUDGET=2
+  INJ_BUDGET_FAST=1
   inj_count_spawns "$INJTMP/payload.json"
   inj_got="$INJ_SPAWNS"; inj_budget_out="$INJ_SPAWN_OUT"
   # The shimmed run must still produce the RIGHT output, or a shim that perturbs the code
@@ -952,6 +1030,28 @@ shimmed run injected the region: $inj_shim_ok (0 makes the count above meaningle
 called: $(sort "$INJLOG" | uniq -c | tr '\n' ' ')
 On Windows each spawn costs 0.15-1.1s in a SessionStart hook."
   fi
+
+  # The fast path, which is the one every real session start takes. Measured separately
+  # rather than assumed from the payload-path number: what is being asserted is that the
+  # exported cwd actually removes the python spawn, not merely that it is preferred.
+  : > "$INJLOG"
+  inj_fast_out="$( PATH="$INJSHIM:$PATH"; env CLAUDE_PROJECT_DIR="$INJPROJ" \
+    CLAUDE_PLUGIN_ROOT="$PLUGIN" bash "$INJHOOK" < "$INJTMP/blankcwd.json" 2>/dev/null )"
+  inj_fast="$(wc -l < "$INJLOG" | tr -d ' ')"
+  # No `|| echo 0`: grep -c already prints 0 when it matches nothing, and the fallback would
+  # append a second line, turning the numeric test below into a syntax error on the happy path.
+  inj_fast_py="$(grep -c '^python' "$INJLOG" 2>/dev/null)"; inj_fast_py="${inj_fast_py:-0}"
+  inj_fast_ok=0
+  [[ "$inj_fast_out" == *'demo: fatal: cannot open state file'* ]] && inj_fast_ok=1
+  if (( inj_fast_ok )) && [[ "$inj_fast" -le "$INJ_BUDGET_FAST" && "$inj_fast_py" -eq 0 ]]; then
+    pass "spawn budget: with CLAUDE_PROJECT_DIR set, $inj_fast process(es) and no python (budget $INJ_BUDGET_FAST)"
+  else
+    fail "spawn budget: with CLAUDE_PROJECT_DIR set" \
+      "spawned $inj_fast processes (budget $INJ_BUDGET_FAST), python calls=$inj_fast_py
+shimmed run injected the region: $inj_fast_ok (0 makes the count above meaningless)
+called: $(sort "$INJLOG" | uniq -c | tr '\n' ' ')"
+  fi
+
   # ...and the two opt-outs must cost nothing at all. They are the first two lines of the
   # script for that reason: a guard that fires only after the memory dir has been resolved
   # would already have spent the whole budget.
