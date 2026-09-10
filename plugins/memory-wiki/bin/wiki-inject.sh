@@ -28,9 +28,6 @@
 #   0  when either opt-out is set — the two guards are the first statements in the file.
 # Region extraction and the mixed-form path conversion are bash builtins and cost nothing.
 #
-# This was 9 before _wiki-paths.sh was re-vendored from claude-memory 0.3.5; see that file's
-# header for the resolver bug that cost the other seven.
-#
 # Silent, exit 0, always. A hook that errors visibly at session start is worse than one that
 # no-ops, and every one of these is a normal state rather than a fault: the recursion guard,
 # the opt-out, no python, an unparseable or absent cwd, a project with no wiki, and a wiki
@@ -47,70 +44,19 @@ set -uo pipefail
 # expansion rather than the usual `$(cd "$(dirname ...)" && pwd)` because that idiom costs a
 # `dirname` process and a subshell for a value only ever used to source a sibling file.
 DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin}"
-if [[ -z "$DIR" || ! -f "$DIR/_wiki-paths.sh" ]]; then
+if [[ -z "$DIR" || ! -f "$DIR/_wiki-hook.sh" ]]; then
   SELF="${BASH_SOURCE[0]}"
   DIR="${SELF%/*}"
   [[ "$DIR" == "$SELF" ]] && DIR="."
 fi
-# shellcheck source=_wiki-paths.sh
-. "$DIR/_wiki-paths.sh" 2>/dev/null
+# shellcheck source=_wiki-hook.sh
+. "$DIR/_wiki-hook.sh" 2>/dev/null
 # The single guard, deliberately: `.` returns the status of the *last statement* in the file it
 # sourced, so `|| exit 0` on the source line would be at the mercy of whatever that happens to
-# be. Whether the resolver is actually usable is the question, and this is the question.
-declare -f wiki_project_dir >/dev/null 2>&1 || exit 0
+# be. Whether the helpers are actually usable is the question, and this is the question.
+declare -f wiki_hook_memdir wiki_project_dir >/dev/null 2>&1 || exit 0
 
-# --- the payload ---
-# `read -d ''` consumes the whole stream with a builtin; `$(cat)` would cost a process. The
-# tty guard keeps a hand-run of this script from hanging on a terminal that will never send
-# anything — a no-op is the right answer there too.
-#
-# stdin is drained here even on the path that turns out not to need it: leaving the payload
-# unread would make Claude Code's writer take an EPIPE, and draining it costs nothing.
-PAYLOAD=""
-if [[ ! -t 0 ]]; then
-  IFS= read -r -d '' PAYLOAD || true
-fi
-
-# Prefer the cwd Claude Code already exported, exactly as claude-memory's memory-inject.sh
-# does, and only pay for python to parse the payload when it is absent (non-Claude hosts).
-# Both land on the same memory dir: wiki_project_dir maps a repo root, any subdirectory of
-# it, and any linked worktree of it to one and the same main-worktree root. This is not a
-# corner: python is the most expensive spawn this hook can make, and on a normal Claude Code
-# session start it is now never made at all.
-CWD="${CLAUDE_PROJECT_DIR:-}"
-if [[ -z "$CWD" ]]; then
-  [[ -z "$PAYLOAD" ]] && exit 0
-
-  PYBIN=""
-  if command -v python >/dev/null 2>&1; then
-    PYBIN="python"
-  elif command -v python3 >/dev/null 2>&1; then
-    PYBIN="python3"
-  else
-    exit 0
-  fi
-
-  # Every malformed shape lands on the empty string and therefore on a silent exit: not JSON,
-  # JSON that is not an object, an object with no `cwd`, a null `cwd`. A here-string rather
-  # than a pipe, so this costs one process and not one process plus a forked writer.
-  CWD="$("$PYBIN" -c '
-import sys, json
-try:
-    d = json.loads(sys.stdin.read())
-    v = d.get("cwd") if isinstance(d, dict) else None
-    if isinstance(v, str) and v:
-        sys.stdout.write(v)
-except Exception:
-    pass' <<< "$PAYLOAD" 2>/dev/null || true)"
-  CWD="${CWD%$'\r'}"
-fi
-[[ -z "$CWD" ]] && exit 0
-
-# Worktree-aware, and resolved exactly once: a linked worktree shares the MAIN repo's memory
-# dir. This is the shared vendored resolver every other memory-wiki entry point uses — a
-# faster private copy here is precisely how a project's memory and its wiki end up in
-# different directories.
-MEMDIR="$(wiki_project_dir "$CWD")/memory"
+wiki_hook_memdir || exit 0
 WIKI="$MEMDIR/wiki"
 [[ -d "$WIKI" ]] || exit 0   # project has no wiki -> nothing to inject
 
@@ -178,32 +124,22 @@ extract_region "$ATLAS_DIR/index.md"; ATLAS_REGION="$REGION"
 
 [[ -z "$PROJ_REGION" && -z "$ATLAS_REGION" ]] && exit 0
 
-# Mixed form (C:/foo/bar) is what the model needs to open the file on Windows, and it is
-# harmless everywhere else. wiki_to_mixed is the vendored pure-bash conversion — the sibling
-# documents it as "the shape `cygpath -m` produced" — so this costs no process. `cygpath -m`
-# remains the fallback for one specific reason rather than as decoration: a stale plugin cache
-# can leave an older _wiki-paths.sh on disk that predates wiki_to_mixed, and that is a
-# documented failure mode in this repo, not a hypothetical.
-mixed_path() {
-  if declare -f wiki_to_mixed >/dev/null 2>&1; then
-    wiki_to_mixed "$1"
-  elif command -v cygpath >/dev/null 2>&1; then
-    cygpath -m "$1" 2>/dev/null || printf '%s' "$1"
-  else
-    printf '%s' "$1"
-  fi
-}
-
 # One header line per section: where the wiki is, and the rule for using it. The rule is the
 # whole point (§6.2) — an index the model reads pages out of unconditionally is a context
 # budget with no ceiling, while an index it consults and mostly ignores is a lookup table.
+#
+# The path is in mixed form (C:/foo/bar), which the model needs to open the file on Windows and
+# which is harmless everywhere else. wiki_to_mixed prints it straight into the header rather
+# than through a $(...), which would fork once per section.
 if [[ -n "$PROJ_REGION" ]]; then
-  printf '\n## Memory wiki (%s) — read a linked page ONLY when a line below matches what you are doing; the line is the affordance.\n\n%s\n' \
-    "$(mixed_path "$WIKI")" "$PROJ_REGION"
+  printf '\n## Memory wiki ('; wiki_to_mixed "$WIKI"
+  printf ') — read a linked page ONLY when a line below matches what you are doing; the line is the affordance.\n\n%s\n' \
+    "$PROJ_REGION"
 fi
 if [[ -n "$ATLAS_REGION" ]]; then
-  printf '\n## Memory wiki — cross-project atlas (%s) — same rule: read a linked page ONLY when a line below matches.\n\n%s\n' \
-    "$(mixed_path "$ATLAS_DIR")" "$ATLAS_REGION"
+  printf '\n## Memory wiki — cross-project atlas ('; wiki_to_mixed "$ATLAS_DIR"
+  printf ') — same rule: read a linked page ONLY when a line below matches.\n\n%s\n' \
+    "$ATLAS_REGION"
 fi
 
 exit 0

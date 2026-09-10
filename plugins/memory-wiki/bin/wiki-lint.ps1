@@ -78,15 +78,14 @@ foreach ($f in Get-ChildItem $WikiDir -Filter *.md -File | Sort-Object Name) {
       $typeV   = Get-FmValue $fm 'type'
       $statusV = Get-FmValue $fm 'status'
 
-      $req = @($requiredBase)
-      switch -CaseSensitive ($typeV) {
-        'failure'   { $req += @('sources','symptom') }
-        'component' { $req += @('part_of','sources') }
-        'project'   { $req += @('sources') }
-        'tech'      { $req += @('sources') }
-      }
-      # Sorted once, so the reported list comes out alphabetical.
-      $req = @(Sort-Ordinal $req)
+      # Each list is written in ordinal order, so the reported fields come out alphabetical.
+      $req = @(switch -CaseSensitive ($typeV) {
+        'failure'   { 'description','last_accessed','name','sources','status','symptom','type' }
+        'component' { 'description','last_accessed','name','part_of','sources','status','type' }
+        'project'   { 'description','last_accessed','name','sources','status','type' }
+        'tech'      { 'description','last_accessed','name','sources','status','type' }
+        default     { $requiredBase }
+      })
       # A key with nothing after it is absent, not present — see the matching comment in
       # wiki-lint.sh. `[ \t]`, not `\s`: .NET's `\s` matches Unicode separators that bash's
       # C-locale `[[:blank:]]` does not, and the two reports must stay byte-identical.

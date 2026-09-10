@@ -3,7 +3,7 @@
 #
 # Nothing hand-writes that file, and this script is the reason why. log.md is not a diary: its
 # `- Sources:` lines ARE the record of which weekly rollups have been ingested, and
-# wiki-ingest-plan.sh works out what is still pending by reading exactly those lines back. One
+# _wiki-pending.sh works out what is still pending by reading exactly those lines back. One
 # writer is what keeps the two from drifting — an entry typed by hand in a slightly different
 # shape silently un-ingests a week, and the next session is told to redo work already done. The
 # shape below is therefore a contract with that reader, not a formatting preference.
@@ -59,7 +59,8 @@ fi
 # no process; --date exists only so the tests have a deterministic value to assert.
 [[ -z "$DATE" ]] && printf -v DATE '%(%Y-%m-%d)T' -1
 
-# Render one comma-separated argument into the entry's list form.
+# Render one comma-separated argument into the entry's list form, in RENDERED. A global rather
+# than printed output, because the $(...) needed to capture that would fork once per field.
 #
 # Split by reading lines off a here-string, never by letting the shell word-split the value.
 # Wiki page names are model-generated: an unquoted split runs pathname expansion over every
@@ -68,8 +69,10 @@ fi
 #
 # $1 is the raw value; $2 is `link` for the fields that hold wiki/source page names and
 # anything else for --inbox, whose items are plain capture filenames rather than pages.
+RENDERED=""
 render_list() {
-  local raw="${1:-}" mode="${2:-}" item out=""
+  local raw="${1:-}" mode="${2:-}" item
+  RENDERED=""
   while IFS= read -r item; do
     item="${item#"${item%%[![:space:]]*}"}"
     item="${item%"${item##*[![:space:]]}"}"
@@ -84,22 +87,21 @@ render_list() {
       fi
       item="[[$item]]"
     fi
-    out="${out:+$out, }$item"
+    RENDERED="${RENDERED:+$RENDERED, }$item"
   done <<< "${raw//,/$'\n'}"
-  printf '%s' "$out"
 }
 
-SRC="$(render_list "$SOURCES" link)"
-CRE="$(render_list "$CREATED" link)"
-UPD="$(render_list "$UPDATED" link)"
-INB="$(render_list "$INBOX" plain)"
+render_list "$SOURCES" link;  SRC="$RENDERED"
+render_list "$CREATED" link;  CRE="$RENDERED"
+render_list "$UPDATED" link;  UPD="$RENDERED"
+render_list "$INBOX"   plain; INB="$RENDERED"
 
 LOG="$WIKI/log.md"
 
 # Both writes below are checked, and neither is optional. There is no `set -e` here, so an
 # unchecked redirection that fails — log.md replaced by a directory, a read-only file, a full
 # disk — prints its error and falls straight through to the success message. This is the sole
-# writer of an append-only ledger, and its caller is Task 6's ingest skill, which moves inbox
+# writer of an append-only ledger, and its caller is the ingest skill, which moves inbox
 # captures into consumed/ on the strength of a successful log. A false success there loses the
 # capture with nothing left to show it ever existed.
 

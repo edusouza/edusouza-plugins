@@ -110,13 +110,11 @@ MEMDIR="$(mem_project_dir "$CWD_RAW")/memory"
           # endings; every pattern here ends in `*`, which absorbs it.
           IN_OPEN=0 RLINE=""
           while IFS= read -r RLINE || [[ -n "$RLINE" ]]; do
-            if [[ "$RLINE" == '## Open threads'* ]]; then
-              IN_OPEN=1                       # a section opens, or the next one re-opens
-            elif (( IN_OPEN )) && [[ "$RLINE" == '## '* || "$RLINE" == '# '* ]]; then
-              IN_OPEN=0; continue             # ...and closes here
-            elif (( ! IN_OPEN )); then
-              continue                        # between sections: nothing to keep
-            fi
+            case "$RLINE" in
+              '## Open threads'*) IN_OPEN=1 ;;  # a section opens, or the next one re-opens
+              '## '*|'# '*)       IN_OPEN=0 ;;  # ...and any other heading closes it
+            esac
+            (( IN_OPEN )) || continue
             ROLLUP_OPEN+=( "$RLINE" )
             (( ${#ROLLUP_OPEN[@]} >= 60 )) && break
           done 2>/dev/null < "$LASTWK"

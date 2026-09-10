@@ -36,19 +36,20 @@ are silent and exit 0 on every path, including every failure.
   silence. This is the **only** injector of the index region.
 - **`bin/wiki-nudge.sh` — the write half's alarm clock.** Three lines when weekly rollups are sitting
   un-ingested (a header, the count with the week names, and the one command that clears it) and
-  nothing whatsoever otherwise, which is its state on almost every session start. It does not work
-  out what is pending itself: `bin/wiki-ingest-plan.sh --pending-only` is the single implementation
-  of that rule, shared with the `ingest` skill, so the nudge and the skill cannot disagree. A rollup
-  counts as ingested when `wiki/log.md` carries a `- Sources:` line naming it.
+  nothing whatsoever otherwise, which is its state on almost every session start. The pending rule
+  lives in one sourced function, `wiki_pending` in `bin/_wiki-pending.sh`, which both the nudge and
+  the `ingest` skill's work order (`bin/wiki-ingest-plan.sh`) call, so the two cannot disagree. A
+  rollup counts as ingested when `wiki/log.md` carries a `- Sources:` line naming it.
 
 Both block every session start, so both are budgeted in processes. On this machine a process spawn
 costs ~430 ms measured, and `test/run-tests.sh` pins the counts with a `PATH` shim that logs every
-call:
+call. The two hooks share their payload and memory-dir resolution through `bin/_wiki-hook.sh`, so
+they always agree on which project a session belongs to:
 
 | Hook | Under Claude Code | Other hosts | Opted out |
 | --- | --- | --- | --- |
 | `wiki-inject.sh` | 1 process | 2 | 0 |
-| `wiki-nudge.sh` | 2 processes | 3 | 0 |
+| `wiki-nudge.sh` | 1 process | 2 | 0 |
 
 Claude Code exports `CLAUDE_PROJECT_DIR`, which is the fast path; without it each hook pays one more
 process to parse the hook payload JSON with python. The opt-out guards run before either script does

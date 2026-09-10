@@ -37,8 +37,8 @@ tell the user to run `/memory-wiki:init`. Do not scaffold anything yourself. Tha
 printed on **stderr**, not stdout — with stderr discarded you see an empty work order and no
 explanation, so keep it (`2>&1`).
 
-Do not re-derive any of this by globbing. `wiki-ingest-plan.sh` is the single implementation of
-"pending" — the session-start nudge reads the same one — and a second opinion about it is a week
+Do not re-derive any of this by globbing. `wiki-ingest-plan.sh` reports the single implementation of
+"pending" — the same one the session-start nudge calls — and a second opinion about it is a week
 silently missing from the wiki.
 
 ## 2. Read the rules

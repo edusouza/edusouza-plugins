@@ -17,11 +17,14 @@ as of 0.4.0, so it gets the only implementation.
 The render half is a pure function from a directory of pages to the region
 body; `--render-only` prints it and writes nothing. The write half splices that
 body into wiki/index.md, and a two-line pointer into MEMORY.md, without
-disturbing a byte outside the markers.
+disturbing a byte outside the markers. `--list-pages` prints one
+`name | type | description` line per page for wiki-ingest-plan.sh, so the work
+order reads pages with this same parser rather than a second one.
 
 Usage:
     python wiki-index.py --wiki <WIKI_DIR> [--memory-md <PATH>]
     python wiki-index.py --wiki <WIKI_DIR> --render-only
+    python wiki-index.py --wiki <WIKI_DIR> --list-pages
 """
 
 import os
@@ -53,14 +56,21 @@ INDEX_HEADING = "# Wiki index"
 _SKIP = ("index", "log", "README")
 
 
+def _unquote(value):
+    """Strip one pair of matching surrounding quotes, if there is one."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", "'"):
+        return value[1:-1]
+    return value
+
+
 def parse_frontmatter(text):
     """Parse a flat `key: value` frontmatter block fenced by `---` on line 1.
 
     Only top-level (non-indented) keys are read. An indented key — such as the
     global auto-memory's nested `metadata:` block — is skipped rather than
     matched, so a nested key can never masquerade as a top-level `type:` or
-    `status:`. This mirrors wiki-lint.sh's fm_value, which reads with the same
-    `^key:` anchoring.
+    `status:`. This mirrors wiki-lint.sh's frontmatter pass, which reads with the
+    same top-level anchoring.
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -69,26 +79,18 @@ def parse_frontmatter(text):
     for line in lines[1:]:
         if line.strip() == "---":
             break
-        if not line.strip():
-            continue
         if line[:1] in (" ", "\t"):
             continue
         if ":" not in line:
             continue
         key, _, value = line.partition(":")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", "'"):
-            value = value[1:-1]
-        fm[key] = value
+        fm[key.strip()] = _unquote(value.strip())
     return fm
 
 
 def _strip_link(item):
     """Strip one pair of surrounding quotes, then one pair of wikilink brackets."""
-    item = item.strip()
-    if len(item) >= 2 and item[0] == item[-1] and item[0] in ("\"", "'"):
-        item = item[1:-1]
+    item = _unquote(item.strip())
     if item.startswith("[[") and item.endswith("]]"):
         item = item[2:-2]
     return item
@@ -156,13 +158,8 @@ def active(pages):
     return [p for p in pages if p.get("status") not in ("dormant", "superseded")]
 
 
-def render(pages, link):
-    """Render the index region body from an already-active page list.
-
-    `link` maps a base filename to its rendered link form, e.g.
-    ``lambda base: f"[[{base}]]"`` — used for both wiki pages and the
-    Sources-ingested episodic references, since both render the same way.
-    """
+def render(pages):
+    """Render the index region body from an already-active page list."""
     symptoms = sorted(
         (p["symptom"], p["_base"]) for p in pages if p.get("symptom")
     )
@@ -184,16 +181,16 @@ def render(pages, link):
 
     if symptoms:
         lines = ["## Symptoms — match the literal text, then read the page"]
-        lines += [f"- `{symptom}` → {link(base)}" for symptom, base in symptoms]
+        lines += [f"- `{symptom}` → [[{base}]]" for symptom, base in symptoms]
         sections.append("\n".join(lines))
 
     if mapped:
         lines = ["## Map"]
-        lines += [f"- {link(base)} — {desc}" for base, desc in mapped]
+        lines += [f"- [[{base}]] — {desc}" for base, desc in mapped]
         sections.append("\n".join(lines))
 
     if sources:
-        lines = ["## Sources ingested", ", ".join(link(s) for s in sorted(sources))]
+        lines = ["## Sources ingested", ", ".join(f"[[{s}]]" for s in sorted(sources))]
         sections.append("\n".join(lines))
 
     if not sections:
@@ -242,7 +239,7 @@ def _atomic_write(path, text):
     "\\n" this module carefully placed into "\\r\\n".
     """
     fd, tmp = tempfile.mkstemp(
-        dir=os.path.dirname(path) or ".", prefix=".wiki-index-", suffix=".tmp"
+        dir=os.path.dirname(path), prefix=".wiki-index-", suffix=".tmp"
     )
     try:
         with os.fdopen(fd, "wb") as f:
@@ -285,9 +282,7 @@ def write_region(path, body):
     same file. See that constant for why it cannot be left to the caller.
     """
     path = os.path.abspath(path)
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
 
     try:
         with open(path, "rb") as f:
@@ -374,6 +369,7 @@ def main(argv=None):
     wiki_dir = None
     memory_md = None
     render_only = False
+    list_pages = False
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -391,14 +387,26 @@ def main(argv=None):
             memory_md = argv[i]
         elif arg == "--render-only":
             render_only = True
+        elif arg == "--list-pages":
+            list_pages = True
         i += 1
 
     if not wiki_dir or not os.path.isdir(wiki_dir):
         print(f"ERROR: not a directory: {wiki_dir or '<none>'}", file=sys.stderr)
         return 1
 
+    if list_pages:
+        # Every page, dormant and superseded included: this is the ingest work order's
+        # view of what already exists, and a page the index does not render must still
+        # not be written a second time.
+        _emit("".join(
+            f"{p['_base']} | {p.get('type', '')} | {p.get('description', '')}\n"
+            for p in read_pages(wiki_dir)
+        ))
+        return 0
+
     pages = active(read_pages(wiki_dir))
-    body = render(pages, lambda base: f"[[{base}]]")
+    body = render(pages)
 
     if render_only:
         _emit(body)

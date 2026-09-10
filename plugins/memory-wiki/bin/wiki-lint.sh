@@ -46,17 +46,20 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 # false positives.
 is_structural() { [[ "$1" == "index" || "$1" == "log" || "$1" == "MEMORY" || "$1" == "README" ]]; }
 
-# Reads one top-level frontmatter key ($1) out of a frontmatter body ($2), stripping the key,
-# any surrounding quotes and any trailing whitespace, so `type: "failure"` and `type: failure `
-# both compare equal to `failure`.
-fm_value() {
-  sed -n "s/^$1:[[:space:]]*//p" <<< "$2" | head -n 1 |
-    sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+# Appends the name of every *.md directly inside $1 to the file $2. Parameter expansion rather
+# than `basename`, which would be a process per file.
+collect_names() {
+  local f b
+  for f in "$1"/*.md; do
+    [[ -e "$f" ]] || continue
+    b="${f##*/}"; printf '%s\n' "${b%.md}"
+  done >> "$2"
 }
 
 # --- collect page names and per-page link lists ---
 : > "$TMP/pages"; : > "$TMP/links"; : > "$TMP/inbound"; : > "$TMP/nofm"; : > "$TMP/schema"
 LINK_COUNT=0
+declare -A FMV FMHAS
 
 for f in "$WIKI"/*.md; do
   [[ -e "$f" ]] || continue
@@ -64,42 +67,65 @@ for f in "$WIKI"/*.md; do
   is_structural "$base" || echo "$base" >> "$TMP/pages"
 
   # Frontmatter must be a --- fenced block starting on line 1 AND carry every
-  # required field. Which fields those are depends on the page's own type:, so the
-  # list is built per page and sorted once, keeping the reported line alphabetical
-  # without a separate sort step.
+  # required field. Which fields those are depends on the page's own type:.
   if ! is_structural "$base"; then
     if [[ "$(head -n 1 "$f" | tr -d '\r')" != "---" ]]; then
       echo "$base (no frontmatter)" >> "$TMP/nofm"
     else
       fm="$(awk 'NR==1{next} /^---[[:space:]]*$/{exit} {print}' "$f" | tr -d '\r')"
 
-      # Only top-level keys are read — `^type:`, never ` type:`. Pages written by the global
-      # auto-memory nest their keys under a `metadata:` block, which indents them out of every
-      # match here, and that is the wanted behaviour: such a page has no parseable type, so it
-      # reports its absent `type` once as a missing field and is exempt from both the
-      # type-specific requirements and the value checks below. One schema collision must not
-      # cascade into three findings.
-      type_v="$(fm_value type "$fm")"
-      status_v="$(fm_value status "$fm")"
+      # One pass over the frontmatter, all builtins — this runs per page, and a sed or a grep per
+      # field would be a process each. Two things are recorded for every schema key:
+      #   FMV    its FIRST value, stripped of surrounding whitespace and then of one pair of
+      #          double and one pair of single quotes, so `type: "failure"` and `type: failure `
+      #          both compare equal to `failure`;
+      #   FMHAS  whether ANY line gives it a non-blank value.
+      #
+      # A key with nothing after it is absent, not present. A bare `symptom:` would otherwise
+      # count as present while every downstream consumer treats the field as missing anyway —
+      # its FMV is "" so the value checks below skip it, and wiki-index.py's render drops it
+      # from Symptoms, Map and Sources ingested — certifying a page that is unreachable by the
+      # one query this plugin exists to serve. `[[:blank:]]` is space-and-tab in the C locale,
+      # exactly what the PowerShell twin's `[ \t]` matches — the two must agree byte-for-byte.
+      #
+      # Only top-level keys are read: the key is everything before the first colon and must be a
+      # schema name exactly, so ` type:` never matches. Pages written by the global auto-memory
+      # nest their keys under a `metadata:` block, which indents them out of every match here,
+      # and that is the wanted behaviour: such a page has no parseable type, so it reports its
+      # absent `type` once as a missing field and is exempt from both the type-specific
+      # requirements and the value checks below. One schema collision must not cascade into
+      # three findings.
+      FMV=(); FMHAS=()
+      while IFS= read -r line; do
+        key="${line%%:*}"
+        [[ "$key" == "$line" ]] && continue      # no colon on this line
+        case "$key" in
+          description|last_accessed|name|part_of|sources|status|symptom|type) ;;
+          *) continue ;;
+        esac
+        val="${line#*:}"
+        [[ "$val" == *[![:blank:]]* ]] && FMHAS[$key]=1
+        [[ -n "${FMV[$key]+set}" ]] && continue
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        [[ "$val" == \"*\" ]] && val="${val:1:${#val}-2}"
+        [[ "$val" == \'*\' ]] && val="${val:1:${#val}-2}"
+        FMV[$key]="$val"
+      done <<< "$fm"
+      type_v="${FMV[type]:-}"
+      status_v="${FMV[status]:-}"
 
-      req=(description last_accessed name status type)
+      # Each list is written in byte order, so the reported fields come out alphabetical.
       case "$type_v" in
-        failure)      req+=(sources symptom) ;;
-        component)    req+=(part_of sources) ;;
-        project|tech) req+=(sources) ;;
+        failure)      req=(description last_accessed name sources status symptom type) ;;
+        component)    req=(description last_accessed name part_of sources status type) ;;
+        project|tech) req=(description last_accessed name sources status type) ;;
+        *)            req=(description last_accessed name status type) ;;
       esac
-      # A key with nothing after it is absent, not present. `^field:` alone is satisfied by a
-      # bare `symptom:`, and every downstream consumer then treats the page as if the field
-      # were missing anyway: fm_value returns "" so the value checks below skip it, and
-      # wiki-index.py's render drops it from Symptoms, Map and Sources ingested. Reporting
-      # such a page as clean certifies a page that is unreachable by the one query this
-      # plugin exists to serve. `[[:blank:]]` is space-and-tab in the C locale, exactly what
-      # the PowerShell twin's `[ \t]` matches — the two must agree byte-for-byte.
       missing=""
-      while IFS= read -r field; do
-        grep -qE "^${field}:[[:blank:]]*[^[:blank:]]" <<< "$fm" \
-          || missing="${missing:+$missing, }$field"
-      done < <(printf '%s\n' "${req[@]}" | sort)
+      for field in "${req[@]}"; do
+        [[ -n "${FMHAS[$field]:-}" ]] || missing="${missing:+$missing, }$field"
+      done
       [[ -n "$missing" ]] && echo "$base (missing: $missing)" >> "$TMP/nofm"
 
       # A field that is out of range is a different finding from one that is absent, and
@@ -146,21 +172,15 @@ SCHEMA_COUNT=$(sort -u "$TMP/schema" | grep -c . || true)
 # --- resolvable-name sets ---
 : > "$TMP/known"
 cat "$TMP/pages" >> "$TMP/known"
-if [[ -n "$SOURCES" && -d "$SOURCES" ]]; then
-  for f in "$SOURCES"/*.md; do [[ -e "$f" ]] && basename "$f" .md >> "$TMP/known"; done
-fi
+[[ -n "$SOURCES" && -d "$SOURCES" ]] && collect_names "$SOURCES" "$TMP/known"
 # claude-memory's flat root concept_*.md files are legitimate link targets but are not pages of
 # this wiki: they live outside it and memory-wiki never writes them. Counting them as pages
 # would report every unlinked one as an orphan of a wiki it is not part of, and would inflate
 # the page count with files this plugin does not own. So they go into `known` — resolvable —
 # and never into `pages`, which is what gets counted and orphan-checked.
-if [[ -n "$CONCEPTS" && -d "$CONCEPTS" ]]; then
-  for f in "$CONCEPTS"/*.md; do [[ -e "$f" ]] && basename "$f" .md >> "$TMP/known"; done
-fi
+[[ -n "$CONCEPTS" && -d "$CONCEPTS" ]] && collect_names "$CONCEPTS" "$TMP/known"
 : > "$TMP/known_atlas"
-if [[ -n "$ATLAS" && -d "$ATLAS" ]]; then
-  for f in "$ATLAS"/*.md; do [[ -e "$f" ]] && basename "$f" .md >> "$TMP/known_atlas"; done
-fi
+[[ -n "$ATLAS" && -d "$ATLAS" ]] && collect_names "$ATLAS" "$TMP/known_atlas"
 # Every structural file that exists is a real file and a legitimate link target, even though
 # it is excluded from the page count. This must stay the same set the PowerShell twin adds —
 # it derives the list from $structural, so any name missing here reports broken on the bash
