@@ -64,9 +64,68 @@ MEMDIR="$(mem_project_dir "$CWD_RAW")/memory"
     mapfile -t WEEKLIES < <(ls -t "$MEMDIR/episodic/weekly"/*.md 2>/dev/null)
     LASTWK="${WEEKLIES[0]:-}"
     if [[ -n "$LASTWK" ]]; then
+      # TRIM: when a memory-wiki index already covers this same week topically, page by page,
+      # everything below is a second telling of it — except `## Open threads`, which is
+      # transient continuity ("still unresolved when the week ended") that no durable wiki page
+      # reproduces. So in that one case we inject that one section, capped at 60 lines, instead
+      # of 200 lines of prose the model is about to read again in the index.
+      #
+      # The trigger is a POPULATED index, not the existence of <memdir>/wiki/: the `## Symptoms`
+      # and `## Map` headings appear only when the renderer had real pages to work with, so a
+      # user who runs /memory-wiki:init and never ingests keeps the whole rollup instead of
+      # losing it and gaining nothing. With no wiki at all — the majority of projects — nothing
+      # here changes, byte for byte, and the `-f` test that decides so is a bash builtin, so
+      # that path pays no extra process. Escape hatch: CLAUDE_MEMORY_ROLLUP_FULL=1 restores the
+      # full dump unconditionally, wiki or no wiki.
+      #
+      # Both scans are `while read` loops rather than a grep/sed/awk per candidate: this runs in
+      # a SessionStart hook and on Windows every spawn costs 0.15-1.1s (see the header note).
+      ROLLUP_OPEN=()
+      if [[ -z "${CLAUDE_MEMORY_ROLLUP_FULL:-}" \
+            && -f "$MEMDIR/wiki/index.md" && -r "$MEMDIR/wiki/index.md" ]]; then
+        # `-f` rather than `-r` alone on purpose: a directory or a FIFO at index.md satisfies
+        # `-r`, and reading one here would print an error or block forever at session start.
+        WIKI_COVERS=0 RLINE=""
+        while IFS= read -r RLINE || [[ -n "$RLINE" ]]; do
+          if [[ "$RLINE" == '## Symptoms'* || "$RLINE" == '## Map'* ]]; then
+            WIKI_COVERS=1; break
+          fi
+        done 2>/dev/null < "$MEMDIR/wiki/index.md"
+        if (( WIKI_COVERS )); then
+          # From the `## Open threads` line to the next `## ` heading. A trailing CR is left on
+          # the line, so a CRLF rollup is re-emitted with its own endings; every pattern here
+          # ends in `*`, which absorbs it.
+          #
+          # The FIRST such heading, deliberately. A week consolidated twice appends a second
+          # `# Week ...` document into the same file, so ~1 rollup in 10 on a real memory dir
+          # carries two `## Open threads` sections and only the earlier one is injected here.
+          # Widening this to every section is a two-line change; it is not made because the
+          # doubled file is a consolidation artifact, and compensating for it in the reader
+          # would hide it. `CLAUDE_MEMORY_ROLLUP_FULL=1` still shows the whole file.
+          IN_OPEN=0 RLINE=""
+          while IFS= read -r RLINE || [[ -n "$RLINE" ]]; do
+            if (( IN_OPEN )); then
+              [[ "$RLINE" == '## '* ]] && break
+            elif [[ "$RLINE" == '## Open threads'* ]]; then
+              IN_OPEN=1
+            else
+              continue
+            fi
+            ROLLUP_OPEN+=( "$RLINE" )
+            (( ${#ROLLUP_OPEN[@]} >= 60 )) && break
+          done 2>/dev/null < "$LASTWK"
+        fi
+      fi
       echo ""; echo "## Memory - last week (Tier 2)"
       echo "### ${LASTWK##*/}"
-      head -200 "$LASTWK"
+      # Empty array = the trim did not apply (no wiki, an un-ingested one, the escape hatch, or
+      # a rollup with no `## Open threads` heading at all). Every one of those gets the dump
+      # this block has always printed.
+      if (( ${#ROLLUP_OPEN[@]} )); then
+        printf '%s\n' "${ROLLUP_OPEN[@]}"
+      else
+        head -200 "$LASTWK"
+      fi
     fi
   fi
 

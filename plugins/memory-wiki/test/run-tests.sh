@@ -1431,6 +1431,252 @@ else
   fail "hooks: SessionStart declares wiki-inject and wiki-nudge with \${CLAUDE_PLUGIN_ROOT}" "$hooks_bad"
 fi
 
+# --- interop: claude-memory trims its rollup dump once this wiki covers the week ---
+# The one block in this suite that drives a script belonging to the OTHER plugin,
+# plugins/claude-memory/bin/memory-inject.sh. It lives here because memory-wiki is the
+# consumer that motivates the behaviour — the trim exists so the wiki index does not have to
+# share the session-start budget with 200 lines of the same week in prose — and because this
+# repo has exactly one test harness. Nothing in claude-memory knows memory-wiki exists: the
+# whole coupling is one directory name and two heading strings, so it is asserted from the
+# side that depends on it.
+#
+# What each check is worth, stated up front because check 1 asserts the *unchanged* behaviour
+# and would pass just as happily against a memory-inject.sh in which the trim was never
+# written at all:
+#   * checks 1 and 3 fail if the trim ever fires when it must not (no wiki / scaffolded but
+#     never ingested)
+#   * check 2 fails if the trim never fires, and its CLAUDE_MEMORY_ROLLUP_FULL half fails if
+#     it always fires
+# The pair is therefore bidirectional: neither "trim removed" nor "trim unconditional" is a
+# green suite. Every assertion below is the PRESENCE of something the hook rendered, or an
+# absence paired with a presence from the same capture — there is no bare "output was empty"
+# anywhere here, so a memory-inject.sh replaced wholesale by `exit 0` fails all three rather
+# than passing them.
+CMROOT="$REPO/plugins/claude-memory"
+CMHOOK="$CMROOT/bin/memory-inject.sh"
+CMTMP="$(mktemp -d)"
+
+# The rollup all three behavioural checks are driven against. Every section carries a marker
+# whose presence or absence names exactly one property:
+#   BULK_BODY_MARKER     the 200-line dump      — present iff the trim did NOT fire
+#   OPEN_THREADS_MARKER  the section kept       — the transient continuity no wiki page holds
+#   NEXT_SECTION_MARKER  the section after it   — absent proves extraction stopped at `## `
+cm_write_rollup() {
+  printf '%s\n' \
+    '# 2026-W36' \
+    '' \
+    '## Narrative' \
+    'The week in prose, all of which the wiki now covers page by page.' \
+    'BULK_BODY_MARKER' \
+    '' \
+    '## Decisions' \
+    '- decided a thing' \
+    '' \
+    '## Open threads' \
+    '- OPEN_THREADS_MARKER: still unresolved' \
+    '- a second thread' \
+    '' \
+    '## Next week' \
+    'NEXT_SECTION_MARKER' > "$1"
+}
+
+# cm_run <project-dir> [VAR=val ...] -> sets CM_OUT (stdout+stderr) and CM_RC.
+# Deliberately NOT called via $(...) — that would run it in a subshell and discard both.
+# The payload is written to a file and redirected in, never piped, for the reason inj_run
+# gives. Three variables are pinned rather than inherited, because this suite is itself run
+# from inside a Claude Code session that exports the first two:
+#   CLAUDE_PLUGIN_ROOT        -> claude-memory in THIS checkout, never the installed plugin
+#   CLAUDE_PROJECT_DIR        -> unset, so the payload's cwd is what resolves the project
+#   CLAUDE_MEMORY_ROLLUP_FULL -> unset, or a developer who exported it would turn every trim
+#                                assertion below into an assertion of nothing at all
+CM_OUT=""; CM_RC=0
+cm_run() {
+  local proj="$1"; shift
+  printf '{"session_id":"0000","transcript_path":"","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
+    "$proj" > "$CMTMP/payload.json"
+  CM_OUT="$(env -u CLAUDE_PROJECT_DIR -u CLAUDE_MEMORY_ROLLUP_FULL \
+    CLAUDE_PLUGIN_ROOT="$CMROOT" "$@" bash "$CMHOOK" < "$CMTMP/payload.json" 2>&1)"; CM_RC=$?
+}
+
+# Two throwaway projects, because "no wiki" and "an empty wiki" are different states of the
+# same directory and one of them has to survive the other's scaffolding. scratch_project_dir
+# is what keeps both off the user's live memory dir (see its comment).
+CMPROJ="$(mktemp -d)"
+( cd "$CMPROJ" && git init -q . ) >/dev/null 2>&1
+CMPDIR="$(scratch_project_dir "$CMPROJ")"
+CMPROJ2="$(mktemp -d)"
+( cd "$CMPROJ2" && git init -q . ) >/dev/null 2>&1
+CMPDIR2="$(scratch_project_dir "$CMPROJ2")"
+
+if [[ -z "$CMPDIR" || -z "$CMPDIR2" ]]; then
+  # Three separate fails, not one: a $TMPDIR problem must not quietly shrink the number of
+  # checks this suite reports.
+  cm_why="$CMPROJ resolves to $(wiki_project_dir "$CMPROJ") and $CMPROJ2 to
+$(wiki_project_dir "$CMPROJ2"); one of them is this repo's own memory dir or already exists.
+Refusing to scaffold into it or delete it. Check \$TMPDIR."
+  fail "interop: no wiki -> claude-memory dumps the full rollup, unchanged" "$cm_why"
+  fail "interop: populated wiki -> only Open threads, and ROLLUP_FULL restores the dump" "$cm_why"
+  fail "interop: an empty wiki does not trim the rollup" "$cm_why"
+else
+  # --- state 1: memory-enabled, no wiki directory at all (the majority of projects) ---
+  mkdir -p "$CMPDIR/memory/episodic/weekly"
+  cm_write_rollup "$CMPDIR/memory/episodic/weekly/2026-W36.md"
+  cm_run "$CMPROJ"; cm_nowiki_out="$CM_OUT"; cm_nowiki_rc=$CM_RC
+
+  # --- state 2: the same project, scaffolded and really ingested ---
+  bash "$PLUGIN/bin/wiki-init.sh" "$CMPROJ" >/dev/null 2>&1
+  cp "$HERE/fixtures/typed/wiki"/*.md "$CMPDIR/memory/wiki/" 2>/dev/null
+  "$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$CMPDIR/memory/wiki" >/dev/null 2>&1; cm_gen_rc=$?
+  # The premise of check 2, asserted rather than assumed: the guard keys on these two
+  # headings, so an index that never grew one makes "the trim did not fire" mean nothing.
+  cm_idx_ok=0
+  grep -qE '^## (Symptoms|Map)' "$CMPDIR/memory/wiki/index.md" 2>/dev/null && cm_idx_ok=1
+  cm_run "$CMPROJ"; cm_trim_out="$CM_OUT"; cm_trim_rc=$CM_RC
+  cm_run "$CMPROJ" CLAUDE_MEMORY_ROLLUP_FULL=1; cm_full_out="$CM_OUT"; cm_full_rc=$CM_RC
+
+  # ...and the cap, on the same project because it is a property of the same extraction. An
+  # `## Open threads` section of 80 lines: uncapped it injects all 80, which is a worse
+  # session-start bill than the 200-line dump this whole task exists to retire.
+  {
+    printf '%s\n' '# 2026-W36' '' '## Narrative' 'BULK_BODY_MARKER' '' '## Open threads'
+    printf -- '- thread %s\n' {01..80}
+    printf '%s\n' '' '## Next week' 'NEXT_SECTION_MARKER'
+  } > "$CMPDIR/memory/episodic/weekly/2026-W36.md"
+  cm_run "$CMPROJ"; cm_cap_out="$CM_OUT"; cm_cap_rc=$CM_RC
+  cm_cap_n="$(grep -c '^- thread ' <<< "$cm_cap_out")"; cm_cap_n="${cm_cap_n:-0}"
+
+  # ...and the third guard condition, which the brief's table does not name but its Interfaces
+  # line does: a rollup with no `## Open threads` heading at all. Having nothing to keep means
+  # the full dump, not an empty Tier-2 block — the same wiki that trimmed twice above is still
+  # in place, so a pass here can only mean the rollup's own shape decided it.
+  printf '%s\n' '# 2026-W36' '' '## Narrative' 'BULK_BODY_MARKER' '' \
+    '## Next week' 'NEXT_SECTION_MARKER' > "$CMPDIR/memory/episodic/weekly/2026-W36.md"
+  cm_run "$CMPROJ"; cm_noopen_out="$CM_OUT"; cm_noopen_rc=$CM_RC
+
+  # --- state 3: a second project, /memory-wiki:init run and nothing ingested ---
+  mkdir -p "$CMPDIR2/memory/episodic/weekly"
+  cm_write_rollup "$CMPDIR2/memory/episodic/weekly/2026-W36.md"
+  bash "$PLUGIN/bin/wiki-init.sh" "$CMPROJ2" >/dev/null 2>&1
+  cm_empty_idx=0; [[ -f "$CMPDIR2/memory/wiki/index.md" ]] && cm_empty_idx=1
+  cm_run "$CMPROJ2"; cm_empty_out="$CM_OUT"; cm_empty_rc=$CM_RC
+
+  # Check 1. The whole rollup, headings and all — asserting the sections *after* Open threads
+  # too, because "the full dump" and "the trimmed section" differ precisely there.
+  cm_bad=""
+  [[ $cm_nowiki_rc -eq 0 ]] || cm_bad="$cm_bad rc=$cm_nowiki_rc;"
+  for needle in \
+    '## Memory - last week (Tier 2)' \
+    '### 2026-W36.md' \
+    'BULK_BODY_MARKER' \
+    '## Open threads' \
+    'OPEN_THREADS_MARKER' \
+    'NEXT_SECTION_MARKER'; do
+    [[ "$cm_nowiki_out" == *"$needle"* ]] || cm_bad="$cm_bad missing: $needle;"
+  done
+  if [[ -z "$cm_bad" ]]; then
+    pass "interop: no wiki -> claude-memory dumps the full rollup, unchanged"
+  else
+    fail "interop: no wiki -> claude-memory dumps the full rollup, unchanged" "$cm_bad
+$cm_nowiki_out"
+  fi
+
+  # Check 2. The trim itself, its boundary, its cap, and its escape hatch.
+  cm_bad=""
+  [[ $cm_gen_rc -eq 0 ]] || cm_bad="$cm_bad generator rc=$cm_gen_rc;"
+  [[ $cm_idx_ok -eq 1 ]] \
+    || cm_bad="$cm_bad index.md carries no ^## Symptoms/Map heading, so nothing here could have triggered the trim;"
+  [[ $cm_trim_rc -eq 0 && $cm_full_rc -eq 0 && $cm_cap_rc -eq 0 && $cm_noopen_rc -eq 0 ]] \
+    || cm_bad="$cm_bad rc trim=$cm_trim_rc full=$cm_full_rc cap=$cm_cap_rc no-open=$cm_noopen_rc;"
+  # The section survives, and so does the framing that says which week it came from — a bare
+  # `## Open threads` with no provenance is continuity the model cannot place.
+  for needle in \
+    '## Memory - last week (Tier 2)' \
+    '### 2026-W36.md' \
+    '## Open threads' \
+    'OPEN_THREADS_MARKER'; do
+    [[ "$cm_trim_out" == *"$needle"* ]] || cm_bad="$cm_bad trimmed run missing: $needle;"
+  done
+  [[ "$cm_trim_out" != *'BULK_BODY_MARKER'* ]] \
+    || cm_bad="$cm_bad the trimmed run still carries the bulk body;"
+  [[ "$cm_trim_out" != *'NEXT_SECTION_MARKER'* ]] \
+    || cm_bad="$cm_bad extraction ran past the next ## heading;"
+  # The escape hatch, asserted as byte equality with the no-wiki run rather than as "the
+  # marker came back": the contract is the OLD output exactly, and nothing else about this
+  # project changed between the two captures.
+  [[ "$cm_full_out" == *'BULK_BODY_MARKER'* ]] \
+    || cm_bad="$cm_bad CLAUDE_MEMORY_ROLLUP_FULL=1 did not restore the dump;"
+  [[ "$cm_full_out" == "$cm_nowiki_out" ]] \
+    || cm_bad="$cm_bad CLAUDE_MEMORY_ROLLUP_FULL=1 output differs from the no-wiki dump;"
+  [[ "$cm_cap_out" == *'- thread 01'* ]] \
+    || cm_bad="$cm_bad the 80-line run injected no thread lines at all;"
+  [[ "$cm_cap_out" != *'BULK_BODY_MARKER'* ]] \
+    || cm_bad="$cm_bad the 80-line run was not trimmed at all;"
+  (( cm_cap_n >= 1 && cm_cap_n <= 60 )) \
+    || cm_bad="$cm_bad injected $cm_cap_n of 80 thread lines, cap is 60;"
+  for needle in 'BULK_BODY_MARKER' 'NEXT_SECTION_MARKER'; do
+    [[ "$cm_noopen_out" == *"$needle"* ]] \
+      || cm_bad="$cm_bad a rollup with no ## Open threads heading lost: $needle;"
+  done
+  if [[ -z "$cm_bad" ]]; then
+    pass "interop: populated wiki -> only Open threads, and ROLLUP_FULL restores the dump"
+  else
+    fail "interop: populated wiki -> only Open threads, and ROLLUP_FULL restores the dump" "$cm_bad
+--- trimmed ---
+$cm_trim_out
+--- ROLLUP_FULL=1 ---
+$cm_full_out
+--- 80-line Open threads ($cm_cap_n thread lines injected) ---
+$cm_cap_out
+--- rollup with no ## Open threads heading ---
+$cm_noopen_out"
+  fi
+
+  # Check 3. /memory-wiki:init and no ingest: the user would otherwise lose the rollup and
+  # gain nothing, which is the whole reason the guard keys on a populated heading rather than
+  # on the wiki directory existing.
+  cm_bad=""
+  [[ $cm_empty_rc -eq 0 ]] || cm_bad="$cm_bad rc=$cm_empty_rc;"
+  [[ $cm_empty_idx -eq 1 ]] \
+    || cm_bad="$cm_bad wiki-init.sh wrote no index.md, so this project is not the case under test;"
+  for needle in \
+    '## Memory - last week (Tier 2)' \
+    'BULK_BODY_MARKER' \
+    '## Open threads' \
+    'NEXT_SECTION_MARKER'; do
+    [[ "$cm_empty_out" == *"$needle"* ]] || cm_bad="$cm_bad missing: $needle;"
+  done
+  if [[ -z "$cm_bad" ]]; then
+    pass "interop: an empty wiki does not trim the rollup"
+  else
+    fail "interop: an empty wiki does not trim the rollup" "$cm_bad
+$cm_empty_out"
+  fi
+
+  rm -rf "$CMPDIR" "$CMPDIR2"
+fi
+rm -rf "$CMPROJ" "$CMPROJ2" "$CMTMP"
+
+# Check 4. claude-memory's own two version fields, guarded exactly like memory-wiki's at the
+# top of this file — same two independent catalogs, same recurring failure mode, and this is
+# the one task that touches the other plugin. Outside the $TMPDIR guard above, since it reads
+# nothing but the two manifests.
+#
+# The literal is pinned, not merely the agreement: 0.3.5 already shipped WITHOUT this trim, so
+# a checkout that carries the behaviour while still claiming 0.3.5 is describing a plugin that
+# behaves differently from the one the user installed. Bump this line with the version.
+CMPJ="$CMROOT/.claude-plugin/plugin.json"
+cm_pv="$("$PYBIN" -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$CMPJ" 2>&1)"
+cm_mv="$("$PYBIN" -c "
+import json,sys
+m=json.load(open(sys.argv[1]))
+e=[p for p in m['plugins'] if p['name']=='claude-memory']
+print(e[0]['version'] if e else 'MISSING')" "$MJ" 2>&1)"
+if [[ "$cm_pv" == "$cm_mv" && "$cm_pv" == "0.3.6" ]]; then
+  pass "interop: claude-memory version parity ($cm_pv)"
+else
+  fail "interop: claude-memory version parity" "plugin.json=$cm_pv  marketplace.json=$cm_mv  want=0.3.6"
+fi
+
 # --- smoke: run against a real memory dir if one exists ---
 # Asserts shape only. Counts change as memory grows and must never be pinned here.
 REAL="$(ls -d "$HOME"/.claude/projects/*/memory 2>/dev/null | head -1)"
