@@ -532,7 +532,8 @@ Fixed the consolidation bug in `claude-memory`. See commit `a1b2c3d`.
 
 Four defects, each fatal on its own:
 
-1. **No `part_of:`.** `type: component` requires it. `lint` reports the schema error, but the real
+1. **No `part_of:`.** `type: component` requires it. `lint` reports it as missing frontmatter — an
+   absent required field, not a schema error; §3 draws that distinction — but the real
    damage is that nothing on the page says which repo it belongs to, and no project page can list
    it — so it is an orphan from the moment it is written.
 2. **No `sources:`.** Also required for a component. Nothing here is checkable: there is no rollup

@@ -1,6 +1,6 @@
 ---
 name: lint
-description: Audit a project's memory wiki for structural and content drift. Runs the bundled wiki-lint script for exhaustive structural checks (broken wikilinks, orphan pages, missing frontmatter, injection budget), then adds the judgment-based checks a script cannot make — contradictions between pages, claims superseded by newer sources, and entities that recur across pages without their own page. Use when the user says "lint the memory wiki", "audit my memory", "what's broken in my memory", or asks what the memory is missing.
+description: Audit a project's memory wiki for structural and content drift. Runs the bundled wiki-lint script for exhaustive structural checks (broken wikilinks, orphan pages, missing frontmatter, schema errors, injection budget), then adds the judgment-based checks a script cannot make — contradictions between pages, claims superseded by newer sources, and entities that recur across pages without their own page. Use when the user says "lint the memory wiki", "audit my memory", "what's broken in my memory", or asks what the memory is missing.
 ---
 
 # Lint the memory wiki
@@ -71,3 +71,9 @@ touched. Flag only the most significant instances of:
 - **A page flagged for missing frontmatter may belong to a different system.** Files written by the
   global auto-memory use nested `metadata:` frontmatter rather than the flat schema; that is a schema
   collision worth reporting as such, not a page to "fix".
+- **`SCHEMA` and `NO FRONTMATTER` answer different questions.** A required field that is absent —
+  or present with nothing after the colon, which reads the same way — is reported under
+  `NO FRONTMATTER`. `SCHEMA` is only for a field that is present and out of range: a `type:` or
+  `status:` outside the five and three allowed values. Relay them as the two findings they are; a
+  bad `type:` in particular also exempts the page from its own type's extra requirements, so it is
+  the more damaging of the two and worth saying so.
