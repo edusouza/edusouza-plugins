@@ -12,10 +12,15 @@ export LC_ALL=C
 
 WIKI=""; SOURCES=""; ATLAS=""; CONCEPTS=""
 while [[ $# -gt 0 ]]; do
+  # `shift 2` shifts nothing and returns non-zero when the flag came last with no value, which
+  # would spin this loop forever; fall back to shifting the flag on its own. Same idiom, and
+  # the same reason, as wiki-log.sh. It is not theoretical here: this script is invoked by a
+  # model — skills/ingest/SKILL.md passes two of these flags — and a hung Bash call in the
+  # middle of a verify step is worse than any wrong report.
   case "$1" in
-    --sources)  SOURCES="${2:-}";  shift 2 ;;
-    --atlas)    ATLAS="${2:-}";    shift 2 ;;
-    --concepts) CONCEPTS="${2:-}"; shift 2 ;;
+    --sources)  SOURCES="${2:-}";  shift 2 || shift ;;
+    --atlas)    ATLAS="${2:-}";    shift 2 || shift ;;
+    --concepts) CONCEPTS="${2:-}"; shift 2 || shift ;;
     *)          WIKI="$1";         shift ;;
   esac
 done
@@ -83,9 +88,17 @@ for f in "$WIKI"/*.md; do
         component)    req+=(part_of sources) ;;
         project|tech) req+=(sources) ;;
       esac
+      # A key with nothing after it is absent, not present. `^field:` alone is satisfied by a
+      # bare `symptom:`, and every downstream consumer then treats the page as if the field
+      # were missing anyway: fm_value returns "" so the value checks below skip it, and
+      # wiki-index.py's render drops it from Symptoms, Map and Sources ingested. Reporting
+      # such a page as clean certifies a page that is unreachable by the one query this
+      # plugin exists to serve. `[[:blank:]]` is space-and-tab in the C locale, exactly what
+      # the PowerShell twin's `[ \t]` matches — the two must agree byte-for-byte.
       missing=""
       while IFS= read -r field; do
-        grep -qE "^${field}:" <<< "$fm" || missing="${missing:+$missing, }$field"
+        grep -qE "^${field}:[[:blank:]]*[^[:blank:]]" <<< "$fm" \
+          || missing="${missing:+$missing, }$field"
       done < <(printf '%s\n' "${req[@]}" | sort)
       [[ -n "$missing" ]] && echo "$base (missing: $missing)" >> "$TMP/nofm"
 

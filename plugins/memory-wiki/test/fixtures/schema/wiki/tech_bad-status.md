@@ -6,4 +6,4 @@ status: stale
 last_accessed: 2026-09-08
 sources: ["[[2026-W35]]"]
 ---
-Links to [[concept_bad-type]].
+Links to [[concept_bad-type]] and [[component_blank-fields]].

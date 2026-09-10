@@ -1,13 +1,15 @@
 ## Structural
-  pages                : 4
-  wikilinks            : 5
+  pages                : 6
+  wikilinks            : 10
   broken links         : 0
   orphans              : 0
-  missing frontmatter  : 2
+  missing frontmatter  : 4
   schema errors        : 2
 
   NO FRONTMATTER:
+    component_blank-fields (missing: description, part_of)
     component_no-parent (missing: part_of, sources)
+    failure_blank-symptom (missing: sources, symptom)
     failure_no-symptom (missing: sources, symptom)
 
   SCHEMA:

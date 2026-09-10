@@ -87,7 +87,10 @@ foreach ($f in Get-ChildItem $WikiDir -Filter *.md -File | Sort-Object Name) {
       }
       # Sorted once, so the reported list comes out alphabetical.
       $req = @(Sort-Ordinal $req)
-      $missing = @($req | Where-Object { $fld = $_; -not ($fm | Where-Object { $_ -cmatch "^$fld`:" }) })
+      # A key with nothing after it is absent, not present — see the matching comment in
+      # wiki-lint.sh. `[ \t]`, not `\s`: .NET's `\s` matches Unicode separators that bash's
+      # C-locale `[[:blank:]]` does not, and the two reports must stay byte-identical.
+      $missing = @($req | Where-Object { $fld = $_; -not ($fm | Where-Object { $_ -cmatch "^$fld`:[ \t]*[^ \t]" }) })
       if ($missing.Count) { $nofm += "$base (missing: $($missing -join ', '))" }
 
       # Out of range is a different finding from absent, and absent is already reported above,
