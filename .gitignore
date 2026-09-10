@@ -1,0 +1,8 @@
+# SDD scratch: ledgers, briefs, review packages. Regenerated per plan.
+.superpowers/
+
+# Harness-managed worktrees. Never repository content.
+.claude/
+
+# Python bytecode. The index generator is imported by tests as of 0.4.0.
+__pycache__/

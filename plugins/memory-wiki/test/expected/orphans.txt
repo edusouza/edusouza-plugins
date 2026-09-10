@@ -4,6 +4,7 @@
   broken links         : 0
   orphans              : 2
   missing frontmatter  : 0
+  schema errors        : 0
 
   ORPHANS:
     concept_alpha

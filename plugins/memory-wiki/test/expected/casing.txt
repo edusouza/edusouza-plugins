@@ -1,0 +1,16 @@
+## Structural
+  pages                : 3
+  wikilinks            : 3
+  broken links         : 0
+  orphans              : 1
+  missing frontmatter  : 1
+  schema errors        : 0
+
+  ORPHANS:
+    Readme
+
+  NO FRONTMATTER:
+    Readme (no frontmatter)
+
+## Injection budget
+  index region         : 0 B (~0 tokens)

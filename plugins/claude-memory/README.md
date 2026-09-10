@@ -29,8 +29,9 @@ durable heuristics it has learned.
   `concept_*.md`, indexed in `MEMORY.md`, which Claude Code auto-loads every session. Stale concepts
   decay to `dormant`.
 - **Recall.** A `SessionStart` hook (`memory-inject.sh`) injects the last 1–2 sessions + the latest
-  weekly rollup, and reminds you when consolidation is overdue. The `/claude-memory:memory` skill
-  does on-demand search and ad-hoc concept promotion.
+  weekly rollup (or, once a memory-wiki index covers that week, only its open threads — see
+  `CLAUDE_MEMORY_ROLLUP_FULL` below), and reminds you when consolidation is overdue. The
+  `/claude-memory:memory` skill does on-demand search and ad-hoc concept promotion.
 - **Narrative nudge.** A `Stop` hook (`memory-narrative-nudge.sh`) fires once per substantial session
   to have Claude write the end-of-session narrative (the *reasoning*: decisions, dead-ends, lessons).
   This can't happen at exit — `SessionEnd` can't invoke the model — so it rides the `Stop` event.
@@ -68,6 +69,17 @@ likewise moved off exit onto the `Stop` nudge.
 | `CLAUDE_MEMORY_NUDGE_MIN_TURNS` | `6` | Assistant-turn threshold below which a session is too trivial to nudge. |
 | `CLAUDE_MEMORY_CATCHUP_MAX` | `25` | Max sessions the catch-up sweep captures per start (the rest drain on later starts). |
 | `CLAUDE_MEMORY_CATCHUP_MIN_AGE` | `120` | Seconds; transcripts modified more recently are skipped as the in-flight session. |
+| `CLAUDE_MEMORY_ROLLUP_FULL` | unset | Set to `1` to always inject the full 200-line weekly rollup, disabling the trim described below. |
+
+By default the `SessionStart` recall injects up to 200 lines of the latest weekly rollup. If
+[memory-wiki](../memory-wiki) has **ingested that week** for the project — the managed region of its
+`memory/wiki/index.md` cites the rollup as `[[YYYY-Www]]` — that rollup is now duplicated topically,
+page by page, so only its `## Open threads` sections are injected (every occurrence, capped at 60
+lines in total); open threads are transient continuity that no durable wiki page reproduces. A week
+consolidated twice carries two of these sections, and both are kept. **With no wiki, with one
+scaffolded but never ingested, or with one that has not ingested the latest week yet, nothing
+changes** and the full dump is printed exactly as before. `CLAUDE_MEMORY_ROLLUP_FULL=1` restores the
+full dump in every case.
 
 ## Install (local development)
 

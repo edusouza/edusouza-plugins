@@ -1,0 +1,10 @@
+## Symptoms — match the literal text, then read the page
+- `demo: fatal: cannot open state file` → [[failure_demo-crash]]
+
+## Map
+- [[component_demo-plugin]] — the component page of the canonical well-formed wiki
+- [[project_demo]] — the project page of the canonical well-formed wiki
+- [[tech_demo-cli]] — the external tool the demo project is driven through
+
+## Sources ingested
+[[2026-W35]]

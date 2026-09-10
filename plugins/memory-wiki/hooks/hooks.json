@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wiki-inject.sh",
+            "statusMessage": "Recalling the memory wiki"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wiki-nudge.sh",
+            "statusMessage": "Checking for un-ingested rollups"
+          }
+        ]
+      }
+    ]
+  }
+}

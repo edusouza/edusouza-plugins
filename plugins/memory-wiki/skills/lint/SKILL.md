@@ -1,6 +1,6 @@
 ---
 name: lint
-description: Audit a project's memory wiki for structural and content drift. Runs the bundled wiki-lint script for exhaustive structural checks (broken wikilinks, orphan pages, missing frontmatter, injection budget), then adds the judgment-based checks a script cannot make — contradictions between pages, claims superseded by newer sources, and entities that recur across pages without their own page. Use when the user says "lint the memory wiki", "audit my memory", "what's broken in my memory", or asks what the memory is missing.
+description: Audit a project's memory wiki for structural and content drift. Runs the bundled wiki-lint script for exhaustive structural checks (broken wikilinks, orphan pages, missing frontmatter, schema errors, injection budget), then adds the judgment-based checks a script cannot make — contradictions between pages, claims superseded by newer sources, and entities that recur across pages without their own page. Use when the user says "lint the memory wiki", "audit my memory", "what's broken in my memory", or asks what the memory is missing.
 ---
 
 # Lint the memory wiki
@@ -16,15 +16,21 @@ main repo, and getting it wrong points the audit at the wrong project.
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/bin/wiki-lint.sh" "<memdir>/wiki" \
   --sources "<memdir>/episodic/weekly" \
-  --atlas "$HOME/.claude/memory-wiki"
+  --atlas "$HOME/.claude/memory-wiki" \
+  --concepts "<memdir>"
 ```
+
+**`--concepts` is not optional in practice.** It makes claude-memory's flat root `concept_*.md`
+files resolvable as link targets without counting them as pages, so they never appear as orphans of
+a wiki they are not part of. Omit it and every page citing a concept reports as a broken link —
+which is most of them.
 
 If `<memdir>/wiki` does not exist yet, run the script against `<memdir>` itself. The flat
 `concept_*.md` files there are a wiki with no edges, and auditing them is the whole point of this
 phase — a pre-wiki memory dir is the normal case, not an error.
 
 On Windows, or wherever shelling out proves unreliable, `bin/wiki-lint.ps1` produces byte-identical
-output (`-WikiDir` / `-Sources` / `-Atlas`).
+output (`-WikiDir` / `-Sources` / `-Atlas` / `-Concepts`).
 
 Relay the counters verbatim. Do not re-derive them by hand and do not fix anything.
 
@@ -65,3 +71,9 @@ touched. Flag only the most significant instances of:
 - **A page flagged for missing frontmatter may belong to a different system.** Files written by the
   global auto-memory use nested `metadata:` frontmatter rather than the flat schema; that is a schema
   collision worth reporting as such, not a page to "fix".
+- **`SCHEMA` and `NO FRONTMATTER` answer different questions.** A required field that is absent —
+  or present with nothing after the colon, which reads the same way — is reported under
+  `NO FRONTMATTER`. `SCHEMA` is only for a field that is present and out of range: a `type:` or
+  `status:` outside the five and three allowed values. Relay them as the two findings they are; a
+  bad `type:` in particular also exempts the page from its own type's extra requirements, so it is
+  the more damaging of the two and worth saying so.

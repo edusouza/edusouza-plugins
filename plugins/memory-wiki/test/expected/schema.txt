@@ -1,0 +1,20 @@
+## Structural
+  pages                : 6
+  wikilinks            : 10
+  broken links         : 0
+  orphans              : 0
+  missing frontmatter  : 4
+  schema errors        : 2
+
+  NO FRONTMATTER:
+    component_blank-fields (missing: description, part_of)
+    component_no-parent (missing: part_of, sources)
+    failure_blank-symptom (missing: sources, symptom)
+    failure_no-symptom (missing: sources, symptom)
+
+  SCHEMA:
+    concept_bad-type (invalid: type=heuristic)
+    tech_bad-status (invalid: status=stale)
+
+## Injection budget
+  index region         : 0 B (~0 tokens)

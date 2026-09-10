@@ -1,0 +1,10 @@
+## Pending sources (2)
+2026-W35
+2026-W36
+
+## Existing pages (2)
+component_demo-plugin | component | the plugin that does the demo thing
+failure_demo-crash | failure | the demo binary exits 1 with no output at all
+
+## Inbox (1)
+2026-09-02-note.md
