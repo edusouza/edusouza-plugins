@@ -97,20 +97,32 @@ def _strip_link(item):
 def parse_list(value):
     """Parse a frontmatter value that names one or more wiki/source pages.
 
-    Accepts a YAML flow list (`["[[2026-W35]]", "[[other]]"]`), a bare
-    wikilink (`[[name]]`), or a bare scalar, and returns plain names with
-    quotes and wikilink brackets stripped. A flow list is distinguished from a
-    bare wikilink by its second character: `["..."` opens a list of quoted
-    items, while `[[...` is a bracket pair with nothing between them and the
-    next `[`.
+    Accepts a YAML flow list (`["[[2026-W35]]", "[[other]]"]`), a bare comma
+    list of wikilinks (`[[2026-W35]], [[other]]`), a single wikilink
+    (`[[name]]`), or a bare scalar, and returns plain names with quotes and
+    wikilink brackets stripped. A flow list is distinguished from a bare
+    wikilink by its second character: `["..."` opens a list of quoted items,
+    while `[[...` is a bracket pair with nothing between them and the next `[`.
+
+    The bracketless comma form is here because the field is written by a model
+    reading a format full of `[[...]]`, and it will sometimes hand them back
+    without the flow brackets — wiki-log.sh's render_list already extends the
+    same courtesy for the same reason. Splitting on the comma matters beyond
+    tidiness: wiki-lint.sh scans the identical line with `\\[\\[[^]|#]*` and sees
+    two perfectly resolvable links, so without this the linter would report
+    clean while the index carried one garbage name ("a]], [[b") rendered as a
+    broken link. Two parsers of one field must not disagree.
+
+    Splitting on every comma, like render_list, is the deliberate limit: a page
+    name containing a comma is not a filename this plugin ever writes, and
+    matching the writer is worth more than covering a name that cannot occur.
     """
     value = value.strip()
     if not value:
         return []
     if value.startswith("[") and not value.startswith("[["):
-        inner = value[1:-1] if value.endswith("]") else value[1:]
-        return [_strip_link(item) for item in inner.split(",") if item.strip()]
-    return [_strip_link(value)]
+        value = value[1:-1] if value.endswith("]") else value[1:]
+    return [_strip_link(item) for item in value.split(",") if item.strip()]
 
 
 def read_pages(wiki_dir):
