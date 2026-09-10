@@ -56,6 +56,10 @@ INDEX_HEADING = "# Wiki index"
 _SKIP = ("index", "log", "README")
 
 
+class PageError(Exception):
+    """A wiki page that cannot be read as UTF-8 text. The message names the file."""
+
+
 def _unquote(value):
     """Strip one pair of matching surrounding quotes, if there is one."""
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", "'"):
@@ -71,6 +75,10 @@ def parse_frontmatter(text):
     matched, so a nested key can never masquerade as a top-level `type:` or
     `status:`. This mirrors wiki-lint.sh's frontmatter pass, which reads with the
     same top-level anchoring.
+
+    When a key repeats, its FIRST value wins, exactly as in wiki-lint.sh and
+    wiki-lint.ps1. Otherwise a page could lint clean on one value and be
+    rendered into the injected index on another.
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -84,7 +92,7 @@ def parse_frontmatter(text):
         if ":" not in line:
             continue
         key, _, value = line.partition(":")
-        fm[key.strip()] = _unquote(value.strip())
+        fm.setdefault(key.strip(), _unquote(value.strip()))
     return fm
 
 
@@ -133,6 +141,9 @@ def read_pages(wiki_dir):
     Directory listing is sorted with Python's default code-point ordering —
     the same byte ordering `LC_ALL=C` gives the bash side — so callers that
     rely on filename order (the Map section) get it for free.
+
+    A page that is not valid UTF-8 raises PageError naming the file, so the
+    caller can say which page to fix instead of printing a traceback.
     """
     pages = []
     for name in sorted(os.listdir(wiki_dir)):
@@ -141,8 +152,15 @@ def read_pages(wiki_dir):
         base = name[:-3]
         if base in _SKIP:
             continue
-        with open(os.path.join(wiki_dir, name), "rb") as f:
-            text = f.read().decode("utf-8")
+        path = os.path.join(wiki_dir, name)
+        with open(path, "rb") as f:
+            data = f.read()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PageError(
+                f"{path}: not valid UTF-8 ({exc.reason} at byte {exc.start})"
+            ) from None
         fm = parse_frontmatter(text)
         fm["_base"] = base
         pages.append(fm)
@@ -395,17 +413,26 @@ def main(argv=None):
         print(f"ERROR: not a directory: {wiki_dir or '<none>'}", file=sys.stderr)
         return 1
 
+    try:
+        all_pages = read_pages(wiki_dir)
+    except (OSError, PageError) as exc:
+        # One unreadable page stops every mode, by name: rendering without it would
+        # silently drop that page from the index, and listing without it would have
+        # the ingest skill author a duplicate of it.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
     if list_pages:
         # Every page, dormant and superseded included: this is the ingest work order's
         # view of what already exists, and a page the index does not render must still
         # not be written a second time.
         _emit("".join(
             f"{p['_base']} | {p.get('type', '')} | {p.get('description', '')}\n"
-            for p in read_pages(wiki_dir)
+            for p in all_pages
         ))
         return 0
 
-    pages = active(read_pages(wiki_dir))
+    pages = active(all_pages)
     body = render(pages)
 
     if render_only:

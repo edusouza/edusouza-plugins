@@ -54,7 +54,9 @@ fi
 # The single guard, deliberately: `.` returns the status of the *last statement* in the file it
 # sourced, so `|| exit 0` on the source line would be at the mercy of whatever that happens to
 # be. Whether the helpers are actually usable is the question, and this is the question.
-declare -f wiki_hook_memdir wiki_project_dir >/dev/null 2>&1 || exit 0
+# wiki_to_mixed is named too, although wiki_project_dir already depends on it: a _wiki-paths.sh
+# from before it existed still defines wiki_project_dir, and the header lines below call it.
+declare -f wiki_hook_memdir wiki_project_dir wiki_to_mixed >/dev/null 2>&1 || exit 0
 
 wiki_hook_memdir || exit 0
 WIKI="$MEMDIR/wiki"

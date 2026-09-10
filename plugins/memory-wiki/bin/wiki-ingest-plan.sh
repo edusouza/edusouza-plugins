@@ -78,12 +78,18 @@ fi
 
 # --- existing pages ----------------------------------------------------------------------
 # wiki-index.py's own page reader, so the type and description listed here are exactly what the
-# index renders, and index/log/README are skipped by the same list. If it cannot run — no python
-# — wiki-index.sh has already said why on stderr, and nothing is printed: a work order showing
-# "(none)" for pages that were never read would have the skill write a duplicate of every one.
-PAGE_LIST="$(bash "$DIR/wiki-index.sh" --wiki "$WIKI" --list-pages)" || exit 0
-PAGES=()
-[[ -n "$PAGE_LIST" ]] && mapfile -t PAGES <<< "$PAGE_LIST"
+# index renders, and index/log/README are skipped by the same list.
+#
+# If it cannot run — no python, or a page that is not valid UTF-8 — its error is already on
+# stderr, and the section says the list is unavailable rather than printing "(none)": a work
+# order claiming there are no pages would have the skill write a duplicate of every one. The
+# other two sections do not depend on it and are printed as usual.
+PAGES=(); PAGES_OK=1
+if PAGE_LIST="$(bash "$DIR/wiki-index.sh" --wiki "$WIKI" --list-pages)"; then
+  [[ -n "$PAGE_LIST" ]] && mapfile -t PAGES <<< "$PAGE_LIST"
+else
+  PAGES_OK=0
+fi
 
 # --- inbox -------------------------------------------------------------------------------
 # A plain glob, so it never descends into inbox/consumed/. Captures moved there are ingested
@@ -96,9 +102,9 @@ for f in "$WIKI/inbox"/*.md; do
 done
 
 # --- the work order ----------------------------------------------------------------------
-# Every section is printed with its count and an explicit (none) when empty. A section that
-# simply vanished would leave the reader unable to tell "nothing pending" from "the script
-# stopped before it got there".
+# Every section is printed with its count and an explicit (none) when empty, or marked
+# (unavailable) when it could not be computed. A section that simply vanished would leave the
+# reader unable to tell "nothing pending" from "the script stopped before it got there".
 emit_section() {
   local title="$1"; shift
   printf '%s (%s)\n' "$title" "$#"
@@ -107,7 +113,11 @@ emit_section() {
 
 emit_section '## Pending sources' ${PENDING[@]+"${PENDING[@]}"}
 printf '\n'
-emit_section '## Existing pages' ${PAGES[@]+"${PAGES[@]}"}
+if (( PAGES_OK )); then
+  emit_section '## Existing pages' ${PAGES[@]+"${PAGES[@]}"}
+else
+  printf '## Existing pages (unavailable)\n(wiki-index.sh could not list them; its error is on stderr)\n'
+fi
 printf '\n'
 emit_section '## Inbox' ${INBOX[@]+"${INBOX[@]}"}
 exit 0

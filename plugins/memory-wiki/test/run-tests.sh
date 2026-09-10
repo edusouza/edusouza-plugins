@@ -31,14 +31,21 @@ fi
 # --- version parity: plugin.json vs marketplace.json ---
 # This repo carries two independent version fields per plugin and nothing validates
 # them, which is its single most recurring failure mode. Guard it from day one.
-PJ="$PLUGIN/.claude-plugin/plugin.json"
 MJ="$REPO/.claude-plugin/marketplace.json"
-PV="$("$PYBIN" -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$PJ" 2>&1)"
-MV="$("$PYBIN" -c "
+# plugin_version <plugin-dir>  -> the version in that plugin's .claude-plugin/plugin.json
+plugin_version() {
+  "$PYBIN" -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" \
+    "$1/.claude-plugin/plugin.json" 2>&1
+}
+# marketplace_version <name>   -> that plugin's version in the root marketplace.json
+marketplace_version() {
+  "$PYBIN" -c "
 import json,sys
-m=json.load(open(sys.argv[1]))
-e=[p for p in m['plugins'] if p['name']=='memory-wiki']
-print(e[0]['version'] if e else 'MISSING')" "$MJ" 2>&1)"
+e=[p for p in json.load(open(sys.argv[1]))['plugins'] if p['name']==sys.argv[2]]
+print(e[0]['version'] if e else 'MISSING')" "$MJ" "$1" 2>&1
+}
+PV="$(plugin_version "$PLUGIN")"
+MV="$(marketplace_version memory-wiki)"
 
 if [[ "$PV" == "$MV" ]]; then
   pass "version parity ($PV)"
@@ -175,6 +182,44 @@ else
 $src_lint"
 fi
 
+# --- index: a repeated frontmatter key keeps its FIRST value, as the linter reads it ---
+# wiki-lint.sh and wiki-lint.ps1 both validate the first occurrence of a key. An index that read
+# the last one instead would let a page lint clean on one value and be injected on another.
+DUPWIKI="$(mktemp -d)"
+printf '%s\n' '---' 'name: Dup' 'description: FIRST_VALUE' 'type: project' 'status: active' \
+  'last_accessed: 2026-09-08' 'sources: ["[[2026-W35]]"]' 'description: SECOND_VALUE' '---' \
+  > "$DUPWIKI/project_dup.md"
+dup_out="$("$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$DUPWIKI" --render-only 2>&1 | tr -d '\r')"
+dup_list="$("$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$DUPWIKI" --list-pages 2>&1 | tr -d '\r')"
+rm -rf "$DUPWIKI"
+if [[ "$dup_out" == *'[[project_dup]] — FIRST_VALUE'* && "$dup_out" != *SECOND_VALUE* \
+      && "$dup_list" == 'project_dup | project | FIRST_VALUE' ]]; then
+  pass "index: a repeated frontmatter key keeps its first value"
+else
+  fail "index: a repeated frontmatter key keeps its first value" "render:
+$dup_out
+list-pages:
+$dup_list"
+fi
+
+# --- index: a page that is not UTF-8 is named, not a traceback ---
+# Such a page crashed every render, index write and page listing with an uncaught
+# UnicodeDecodeError. The run must still fail — an index silently missing a page is worse — but
+# with the file named, so the ingest skill can report what to fix.
+NUTFWIKI="$(mktemp -d)"
+printf '%s\n' '---' 'name: Fine' 'description: a fine page' 'type: project' 'status: active' \
+  'last_accessed: 2026-09-08' 'sources: ["[[2026-W35]]"]' '---' > "$NUTFWIKI/project_fine.md"
+printf -- '---\nname: Bad \xff\xfe\n---\n' > "$NUTFWIKI/project_latin1.md"
+nutf_err="$("$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$NUTFWIKI" --render-only 2>&1 >/dev/null)"; nutf_rc=$?
+rm -rf "$NUTFWIKI"
+if [[ $nutf_rc -eq 1 && "$nutf_err" == *project_latin1.md*'not valid UTF-8'* \
+      && "$nutf_err" != *Traceback* ]]; then
+  pass "index: a non-UTF-8 page fails with its name, not a traceback"
+else
+  fail "index: a non-UTF-8 page fails with its name, not a traceback" "rc=$nutf_rc (want 1)
+$nutf_err"
+fi
+
 # --- path helpers ---
 # shellcheck source=/dev/null
 . "$PLUGIN/bin/_wiki-paths.sh" 2>/dev/null
@@ -217,10 +262,11 @@ fi
 # their entire memory. A `*/projects/*` shape check does not help: the live path matches
 # it exactly as well as a temp hash does. The two conditions that do discriminate are
 # that the dir is not this repo's own, and that it did not already exist.
+REPO_PDIR="$(wiki_project_dir "$REPO" 2>/dev/null)"
 scratch_project_dir() {
   local d
   d="$(wiki_project_dir "$1" 2>/dev/null)"
-  [[ -z "$d" || "$d" == "$(wiki_project_dir "$REPO" 2>/dev/null)" || -e "$d" ]] && return 1
+  [[ -z "$d" || "$d" == "$REPO_PDIR" || -e "$d" ]] && return 1
   printf '%s' "$d"
 }
 
@@ -434,8 +480,8 @@ fi
 #
 # "after" is measured in BYTES rather than captured with $(...). Command substitution strips
 # trailing newlines, so a script that emitted one stray newline would compare equal to "" and
-# this check would certify the exact bug it exists to catch: wiki-nudge.sh counts these lines,
-# and one blank line reads as a pending rollup named "".
+# this check would certify the exact bug it exists to catch: a pending list whose one blank
+# line reads as a rollup named "".
 PLANTMP="$(mktemp -d)"
 cp -r "$PLANFIX" "$PLANTMP/memory"
 rt_want=$'2026-W35\n2026-W36'
@@ -501,7 +547,7 @@ rm -rf "$LOGTMP"
 # belongs never satisfies -f, so the run fails on the create; a read-only regular file does
 # satisfy it, so the run gets as far as the append and fails there. wiki-log.sh has no `set -e`,
 # and an unchecked redirection prints its error and falls straight through to "logged:" —
-# telling Task 6's ingest skill the entry landed immediately before it moves the inbox capture
+# telling the ingest skill the entry landed immediately before it moves the inbox capture
 # into consumed/, which loses the capture with nothing left to show it existed.
 UNWR="$(mktemp -d)"
 mkdir -p "$UNWR/asdir/log.md" "$UNWR/asro"
@@ -529,15 +575,16 @@ fi
 rm -rf "$UNWR"
 
 # A project that never scaffolded a wiki is an expected answer, not a script failure. Under
-# --pending-only it is not even an answer: wiki-nudge.sh would read the report's lines as
-# pending rollups. Bytes again, for the reason given above.
+# --pending-only it is not even an answer, since that stdout is a list of rollup names. Bytes
+# again, for the reason given above.
 NOWIKI="$(mktemp -d)"
 mkdir -p "$NOWIKI/memory"
-nw_out="$(bash "$PLAN" "$NOWIKI/memory" 2>&1)"; nw_rc=$?
+# One run with the streams kept apart: the report must be on stderr, behind that guard rather
+# than instead of it, so stdout stays reserved for the work order.
+bash "$PLAN" "$NOWIKI/memory" > "$NOWIKI/out" 2> "$NOWIKI/err"; nw_rc=$?
+nw_out="$(cat "$NOWIKI/err")"
+nw_stdout="$(wc -c < "$NOWIKI/out" | tr -d '[:space:]')"
 nw_bytes="$(bash "$PLAN" "$NOWIKI/memory" --pending-only 2>&1 | wc -c | tr -d '[:space:]')"
-# ...and the report itself goes to stderr, behind that guard rather than instead of it, so
-# stdout stays reserved for the work order and no future caller can miscount a diagnostic.
-nw_stdout="$(bash "$PLAN" "$NOWIKI/memory" 2>/dev/null | wc -c | tr -d '[:space:]')"
 if [[ $nw_rc -eq 0 && "$nw_out" == *"ERROR: no wiki for: $NOWIKI/memory"* \
       && "$nw_out" == *"/memory-wiki:init"* && "$nw_bytes" == "0" && "$nw_stdout" == "0" ]]; then
   pass "plan: missing wiki reports, exits 0, and stays silent under --pending-only"
@@ -549,15 +596,16 @@ report on stdout: $nw_stdout byte(s), want 0"
 fi
 rm -rf "$NOWIKI"
 
-# Every refused call must leave stdout empty too. wiki-nudge.sh counts the lines this script
-# puts on stdout, so anything there that is not a rollup name becomes a nag the user cannot
-# clear. One typo used to be enough: `--pending--only` was taken as MEMORY_DIR, the real path
-# discarded, and the resulting "no wiki" report read as two pending rollups named after the
-# error text. A second positional is refused for the same reason rather than silently winning.
+# Every refused call must leave stdout empty too, because stdout is read as a work order or a
+# pending list. One typo used to be enough: `--pending--only` was taken as MEMORY_DIR, the real
+# path discarded, and the resulting "no wiki" report printed as though it were the answer. A
+# second positional is refused for the same reason rather than silently winning.
 ref_bad=""
+REFTMP="$(mktemp -d)"
 for bogus in '--pending--only' '--nope'; do
-  b_out="$(bash "$PLAN" "$PLANFIX" "$bogus" 2>/dev/null | wc -c | tr -d '[:space:]')"
-  b_err="$(bash "$PLAN" "$PLANFIX" "$bogus" 2>&1 >/dev/null)"; b_rc=$?
+  bash "$PLAN" "$PLANFIX" "$bogus" > "$REFTMP/out" 2> "$REFTMP/err"; b_rc=$?
+  b_out="$(wc -c < "$REFTMP/out" | tr -d '[:space:]')"
+  b_err="$(cat "$REFTMP/err")"
   [[ "$b_out" == "0" && $b_rc -eq 0 && "$b_err" == *"unrecognized argument"* ]] \
     || ref_bad="$ref_bad
       $bogus: stdout=$b_out byte(s) rc=$b_rc stderr=$b_err"
@@ -569,6 +617,36 @@ if [[ -z "$ref_bad" ]]; then
   pass "plan: a refused argument leaves stdout empty"
 else
   fail "plan: a refused argument leaves stdout empty" "want stdout=0 rc=0 and a stderr complaint:$ref_bad"
+fi
+rm -rf "$REFTMP"
+
+# A page list that cannot be read must neither blank the work order nor read as "(none)". The
+# trigger is a page that is not valid UTF-8, which wiki-index.py refuses by name. The pending and
+# inbox sections do not depend on the page list and must survive it; the pages section must say
+# it is unavailable, because "(none)" would have the skill re-author every page that exists.
+UNAV="$(mktemp -d)"
+cp -r "$PLANFIX" "$UNAV/memory"
+printf -- '---\nname: Bad \xff\xfe\n---\n' > "$UNAV/memory/wiki/project_latin1.md"
+bash "$PLAN" "$UNAV/memory" > "$UNAV/out" 2> "$UNAV/err"; unav_rc=$?
+unav_out="$(cat "$UNAV/out")"; unav_err="$(cat "$UNAV/err")"
+rm -rf "$UNAV"
+unav_bad=""
+[[ $unav_rc -eq 0 ]] || unav_bad="$unav_bad rc=$unav_rc;"
+for needle in $'## Pending sources (2)\n2026-W35\n2026-W36' \
+              $'## Existing pages (unavailable)\n' \
+              $'## Inbox (1)\n2026-09-02-note.md'; do
+  [[ "$unav_out" == *"$needle"* ]] || unav_bad="$unav_bad missing: ${needle%%$'\n'*};"
+done
+[[ "$unav_out" != *'## Existing pages ('[0-9]* ]] || unav_bad="$unav_bad pages section printed a count;"
+[[ "$unav_err" == *project_latin1.md* ]] || unav_bad="$unav_bad stderr does not name the bad page;"
+if [[ -z "$unav_bad" ]]; then
+  pass "plan: an unreadable page list is reported as unavailable, not as a blank work order"
+else
+  fail "plan: an unreadable page list is reported as unavailable, not as a blank work order" "$unav_bad
+--- stdout ---
+$unav_out
+--- stderr ---
+$unav_err"
 fi
 
 # --- PowerShell parity: the .ps1 must match the .sh byte for byte ---
@@ -616,7 +694,7 @@ if command -v pwsh >/dev/null 2>&1; then
   parity typed "$HERE/fixtures/typed/sources"
 
   # -Concepts, which parity above cannot reach: the helper has no slot for it and widening it
-  # is ruled out just there. So the twin's half of Task 7's new interface — the flag that makes
+  # is ruled out just there. So the twin's half of that interface — the flag that makes
   # claude-memory's flat root concept_*.md files resolvable without counting them as pages —
   # otherwise ships with the bash side goldened and the PowerShell side never once invoked.
   #
@@ -657,7 +735,7 @@ for p in README.md skills/lint/SKILL.md commands/lint.md commands/init.md \
          bin/wiki-index.py bin/wiki-index.sh \
          bin/wiki-log.sh bin/wiki-ingest-plan.sh \
          bin/wiki-inject.sh bin/wiki-nudge.sh hooks/hooks.json \
-         bin/_wiki-paths.sh assets/wiki-README.md \
+         bin/_wiki-paths.sh bin/_wiki-hook.sh bin/_wiki-pending.sh assets/wiki-README.md \
          skills/ingest/references/page-authoring.md \
          skills/ingest/SKILL.md commands/ingest.md; do
   [[ -s "$PLUGIN/$p" ]] || missing="$missing $p"
@@ -834,24 +912,44 @@ printf 'not json\n' > "$INJTMP/bad.json"
 : > "$INJTMP/empty.json"
 printf '{"hook_event_name":"SessionStart"}' > "$INJTMP/nocwd.json"
 
-# inj_run <payload-file> [VAR=val ...]  -> sets INJ_OUT (stdout+stderr) and INJ_RC.
-# stderr is captured deliberately: a hook must be silent on *both* streams at session start.
-# Deliberately NOT called via $(...) — that would run it in a subshell and discard INJ_OUT.
+# hook_run <plugin-root> <hook> <payload-file> [VAR=val ...]
+#   -> sets HOOK_OUT (stdout+stderr), HOOK_RC and HOOK_BYTES, all from ONE invocation.
+# The one runner every hook check in this suite goes through. Not called via $(...), which would
+# run it in a subshell and discard all three.
 #
-# Two variables are pinned rather than inherited, because the suite is itself run from inside
-# a Claude Code session that exports both:
+# stderr is captured deliberately: a hook must be silent on *both* streams at session start.
+# Output is captured to a file and measured in BYTES, because command substitution strips
+# trailing newlines and a hook that printed one blank line would otherwise compare equal to "".
+# Reading it back is builtins only, so the runner adds no process to any check.
+#
+# Three variables are pinned rather than inherited, because the suite is itself run from inside
+# a Claude Code session that exports the first two:
 #   CLAUDE_PLUGIN_ROOT — inherited, the hook would locate its bin/ through the *installed*
-#     plugin and every check below would silently exercise the cache instead of this checkout.
-#   CLAUDE_PROJECT_DIR — the hook now prefers it over the payload's cwd (that is the point of
-#     the shortcut), so inheriting it would resolve every check onto the real repo instead of
-#     the throwaway project, and would make "unparseable payload is a silent no-op" test
-#     nothing at all. The shortcut gets its own check below, which sets it deliberately.
-INJ_OUT=""; INJ_RC=0
-inj_run() {
-  local pf="$1"; shift
-  INJ_OUT="$(env -u CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" \
-    bash "$INJHOOK" < "$pf" 2>&1)"; INJ_RC=$?
+#     plugin and every check would silently exercise the cache instead of this checkout.
+#   CLAUDE_PROJECT_DIR — the hooks prefer it over the payload's cwd, so inheriting it would
+#     resolve every check onto the real repo instead of the throwaway project, and would make
+#     the unparseable-payload checks test nothing. Checks of that shortcut pass it as a VAR=val,
+#     which `env` applies after the unset.
+#   CLAUDE_MEMORY_ROLLUP_FULL — a developer who exported it would turn every claude-memory trim
+#     assertion into an assertion of nothing at all.
+HOOK_OUT=""; HOOK_RC=0; HOOK_BYTES=0
+HOOKCAP="$(mktemp -d)"
+hook_run() {
+  local root="$1" hook="$2" pf="$3" raw=""; shift 3
+  env -u CLAUDE_PROJECT_DIR -u CLAUDE_MEMORY_ROLLUP_FULL CLAUDE_PLUGIN_ROOT="$root" "$@" \
+    bash "$hook" < "$pf" > "$HOOKCAP/out" 2>&1
+  HOOK_RC=$?
+  # Byte semantics for the length below, set only after the hook ran so it never inherits them.
+  local LC_ALL=C
+  IFS= read -r -d '' raw < "$HOOKCAP/out"
+  HOOK_BYTES=${#raw}
+  while [[ "$raw" == *$'\n' ]]; do raw="${raw%$'\n'}"; done
+  HOOK_OUT="$raw"
 }
+
+# inj_run <payload-file> [VAR=val ...]  -> sets INJ_OUT and INJ_RC for wiki-inject.sh.
+INJ_OUT=""; INJ_RC=0
+inj_run() { hook_run "$PLUGIN" "$INJHOOK" "$@"; INJ_OUT="$HOOK_OUT"; INJ_RC=$HOOK_RC; }
 
 if [[ -z "$INJPDIR" ]]; then
   fail "inject: silent and exits 0 with no wiki" \
@@ -983,8 +1081,7 @@ emitting run rendered the symptom: $inj_emit_proof (must be 1, or 'silent' prove
   # pass can only mean the exported variable was preferred — and the output must be identical
   # to the payload-driven run, since both resolve through the same wiki_project_dir.
   printf '{"cwd":"","hook_event_name":"SessionStart"}' > "$INJTMP/blankcwd.json"
-  INJ_OUT="$(env CLAUDE_PROJECT_DIR="$INJPROJ" CLAUDE_PLUGIN_ROOT="$PLUGIN" \
-    bash "$INJHOOK" < "$INJTMP/blankcwd.json" 2>&1)"; INJ_RC=$?
+  inj_run "$INJTMP/blankcwd.json" CLAUDE_PROJECT_DIR="$INJPROJ"
   if [[ $INJ_RC -eq 0 && "$INJ_OUT" == "$inj_emit_out" && $inj_emit_proof -eq 1 ]]; then
     pass "inject: CLAUDE_PROJECT_DIR is preferred over the payload cwd"
   else
@@ -1103,43 +1200,52 @@ $inj_at_full"
 
   # --- spawn budget ---
   # Same shim technique as claude-memory/test/run-tests.sh: put a logging wrapper for every
-  # external binary this path can reach on the front of PATH, run the hook, count the log.
-  # This asserts the property the hook actually cares about (how many processes start) rather
-  # than a wall-clock number that would be flaky. On this machine a spawn costs ~430 ms — 50
-  # of them measured 21.5 s — and this hook blocks *every* session start.
+  # external binary a hook can reach on the front of PATH, run the hook, count the log. This
+  # asserts the property the hooks actually care about (how many processes start) rather than a
+  # wall-clock number that would be flaky. On this machine a spawn costs ~430 ms — 50 of them
+  # measured 21.5 s — and both hooks block *every* session start. One shim serves both budgets.
   #
-  # CLAUDE_PLUGIN_ROOT is exported because Claude Code sets it, and because it also pins the
-  # hook to *this checkout* rather than the installed plugin. CLAUDE_PROJECT_DIR is unset for
-  # the payload-path measurement and set only for the fast-path one below, so each number
-  # belongs to a named entry path instead of to whatever the surrounding session exported.
-  INJSHIM="$(mktemp -d)"
-  INJLOG="$INJSHIM/calls.log"; : > "$INJLOG"
-  for bin in git cygpath sed awk grep tr wc cat head tail cut python python3 \
+  # `bash` is shimmed too, so a hook that started a child script would be counted for it. Two
+  # consequences, both deliberate:
+  #   * every shim's shebang names the real bash by ABSOLUTE PATH instead of `/usr/bin/env bash`.
+  #     With a `bash` shim on PATH, `env bash` would resolve to the shim, logging a spurious
+  #     "bash" for every other shimmed call and running each shim under itself.
+  #   * hooks under test are launched through $REALBASH rather than through PATH, so the
+  #     harness's own invocation is not counted as one of the hook's spawns.
+  #
+  # CLAUDE_PLUGIN_ROOT is exported because Claude Code sets it, and because it pins the hook to
+  # *this checkout*. CLAUDE_PROJECT_DIR is unset unless a check passes it, so each number belongs
+  # to a named entry path instead of to whatever the surrounding session exported.
+  SHIM="$(mktemp -d)"
+  SHIMLOG="$SHIM/calls.log"; : > "$SHIMLOG"
+  REALBASH="$(command -v bash 2>/dev/null)"
+  [[ -n "$REALBASH" ]] || REALBASH="${BASH:-/bin/bash}"
+  for bin in bash git cygpath sed awk grep tr wc cat head tail cut python python3 \
              basename dirname realpath readlink; do
     real="$(command -v "$bin" 2>/dev/null)" || continue
     [[ -z "$real" ]] && continue
-    cat > "$INJSHIM/$bin" <<EOF
-#!/usr/bin/env bash
-echo "$bin" >> "$INJLOG"
-exec "$real" "\$@"
-EOF
-    chmod +x "$INJSHIM/$bin"
+    printf '#!%s\necho "%s" >> "%s"\nexec "%s" "$@"\n' \
+      "$REALBASH" "$bin" "$SHIMLOG" "$real" > "$SHIM/$bin"
   done
+  chmod +x "$SHIM"/*
 
-  # Sets the globals INJ_SPAWN_OUT and INJ_SPAWNS. Deliberately NOT called via $(...) — that
-  # would run it in a subshell and discard both. The PATH assignment is scoped to the inner
-  # subshell so the wc/tr that read the log are never themselves counted.
-  INJ_SPAWN_OUT=""; INJ_SPAWNS=0
-  inj_count_spawns() {
-    local pf="$1"; shift
-    : > "$INJLOG"
-    INJ_SPAWN_OUT="$( PATH="$INJSHIM:$PATH"; env -u CLAUDE_PROJECT_DIR \
-      CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" bash "$INJHOOK" < "$pf" 2>/dev/null )"
-    INJ_SPAWNS="$(wc -l < "$INJLOG" | tr -d ' ')"
+  # count_spawns <hook> <payload-file> [VAR=val ...] -> sets SPAWN_OUT, SPAWNS and SPAWNS_PY.
+  # Not called via $(...), which would discard all three. The PATH assignment is scoped to the
+  # inner subshell so the wc/grep that read the log are never themselves counted.
+  SPAWN_OUT=""; SPAWNS=0; SPAWNS_PY=0
+  count_spawns() {
+    local hook="$1" pf="$2"; shift 2
+    : > "$SHIMLOG"
+    SPAWN_OUT="$( PATH="$SHIM:$PATH"; env -u CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT="$PLUGIN" \
+      "$@" "$REALBASH" "$hook" < "$pf" 2>/dev/null )"
+    SPAWNS="$(wc -l < "$SHIMLOG" | tr -d ' ')"
+    # No `|| echo 0`: grep -c already prints 0 when it matches nothing, and the fallback would
+    # append a second line, turning a numeric test into a syntax error on the happy path.
+    SPAWNS_PY="$(grep -c '^python' "$SHIMLOG" 2>/dev/null)"; SPAWNS_PY="${SPAWNS_PY:-0}"
   }
+  spawn_calls() { sort "$SHIMLOG" | uniq -c | tr '\n' ' '; }
 
-  # Two budgets, both enumerated from the shim's own log rather than guessed, because the hook
-  # has two entry paths and production takes the cheaper one:
+  # wiki-inject.sh has two entry paths, and production takes the cheaper one:
   #
   #   payload path (CLAUDE_PROJECT_DIR unset, non-Claude hosts) — 2 processes
   #     1  git      one `rev-parse` inside wiki_project_dir answers every question it has
@@ -1152,19 +1258,13 @@ EOF
   # Everything else is a bash builtin: region extraction is a `while read` loop, and the
   # mixed-form path conversion is wiki_to_mixed rather than a `cygpath -m`. The awk
   # wiki-lint.sh uses to measure the same region would be one spawn per file, two more here.
-  #
-  # This was 9 until the vendored _wiki-paths.sh was re-vendored from claude-memory 0.3.5:
-  # its pre-fda1203 wiki_resolve_main_root compared `rev-parse --absolute-git-dir` against
-  # `--git-common-dir`, which come back in different notations on Windows (C:/… vs /c/…), so
-  # the comparison never matched, every in-repo cwd took the redirect branch, and the detour
-  # cost three git calls plus a dirname where one rev-parse does. See that file's header.
   INJ_BUDGET=2
   INJ_BUDGET_FAST=1
-  inj_count_spawns "$INJTMP/payload.json"
-  inj_got="$INJ_SPAWNS"; inj_budget_out="$INJ_SPAWN_OUT"
+  count_spawns "$INJHOOK" "$INJTMP/payload.json"
+  inj_got="$SPAWNS"; inj_budget_out="$SPAWN_OUT"
   # The shimmed run must still produce the RIGHT output, or a shim that perturbs the code
-  # under test could report a flattering number for a run that did nothing at all. Both
-  # numeric checks below are gated on this: while the hook did not yet exist, they reported
+  # under test could report a flattering number for a run that did nothing at all. Every
+  # numeric check below is gated on this: while the hook did not yet exist, they reported
   # 0 spawns and PASSed — the best budget in the suite, for a script that was not there.
   inj_shim_ok=0
   [[ "$inj_budget_out" == *'demo: fatal: cannot open state file'* \
@@ -1179,44 +1279,37 @@ EOF
   else
     fail "spawn budget: wiki-inject.sh" "spawned $inj_got processes, budget is $INJ_BUDGET
 shimmed run injected the region: $inj_shim_ok (0 makes the count above meaningless)
-called: $(sort "$INJLOG" | uniq -c | tr '\n' ' ')
+called: $(spawn_calls)
 On Windows each spawn costs 0.15-1.1s in a SessionStart hook."
   fi
 
   # The fast path, which is the one every real session start takes. Measured separately
   # rather than assumed from the payload-path number: what is being asserted is that the
   # exported cwd actually removes the python spawn, not merely that it is preferred.
-  : > "$INJLOG"
-  inj_fast_out="$( PATH="$INJSHIM:$PATH"; env CLAUDE_PROJECT_DIR="$INJPROJ" \
-    CLAUDE_PLUGIN_ROOT="$PLUGIN" bash "$INJHOOK" < "$INJTMP/blankcwd.json" 2>/dev/null )"
-  inj_fast="$(wc -l < "$INJLOG" | tr -d ' ')"
-  # No `|| echo 0`: grep -c already prints 0 when it matches nothing, and the fallback would
-  # append a second line, turning the numeric test below into a syntax error on the happy path.
-  inj_fast_py="$(grep -c '^python' "$INJLOG" 2>/dev/null)"; inj_fast_py="${inj_fast_py:-0}"
+  count_spawns "$INJHOOK" "$INJTMP/blankcwd.json" CLAUDE_PROJECT_DIR="$INJPROJ"
+  inj_fast="$SPAWNS"; inj_fast_py="$SPAWNS_PY"
   inj_fast_ok=0
-  [[ "$inj_fast_out" == *'demo: fatal: cannot open state file'* ]] && inj_fast_ok=1
+  [[ "$SPAWN_OUT" == *'demo: fatal: cannot open state file'* ]] && inj_fast_ok=1
   if (( inj_fast_ok )) && [[ "$inj_fast" -le "$INJ_BUDGET_FAST" && "$inj_fast_py" -eq 0 ]]; then
     pass "spawn budget: with CLAUDE_PROJECT_DIR set, $inj_fast process(es) and no python (budget $INJ_BUDGET_FAST)"
   else
     fail "spawn budget: with CLAUDE_PROJECT_DIR set" \
       "spawned $inj_fast processes (budget $INJ_BUDGET_FAST), python calls=$inj_fast_py
 shimmed run injected the region: $inj_fast_ok (0 makes the count above meaningless)
-called: $(sort "$INJLOG" | uniq -c | tr '\n' ' ')"
+called: $(spawn_calls)"
   fi
 
   # ...and the two opt-outs must cost nothing at all. They are the first two lines of the
   # script for that reason: a guard that fires only after the memory dir has been resolved
   # would already have spent the whole budget.
-  inj_count_spawns "$INJTMP/payload.json" MEMORY_WIKI_NO_INJECT=1
-  inj_off="$INJ_SPAWNS"; inj_off_out="$INJ_SPAWN_OUT"
-  if (( inj_shim_ok )) && [[ "$inj_off" -eq 0 && -z "$inj_off_out" ]]; then
+  count_spawns "$INJHOOK" "$INJTMP/payload.json" MEMORY_WIKI_NO_INJECT=1
+  if (( inj_shim_ok )) && [[ "$SPAWNS" -eq 0 && -z "$SPAWN_OUT" ]]; then
     pass "spawn budget: MEMORY_WIKI_NO_INJECT short-circuits before any process starts"
   else
     fail "spawn budget: MEMORY_WIKI_NO_INJECT short-circuits before any process starts" \
-      "spawned $inj_off processes, output=[$inj_off_out]
-called: $(sort "$INJLOG" | uniq -c | tr '\n' ' ')"
+      "spawned $SPAWNS processes, output=[$SPAWN_OUT]
+called: $(spawn_calls)"
   fi
-  rm -rf "$INJSHIM"
 
   # --- region pairing: the reader must agree with the writer ---
   # write_region in bin/wiki-index.py pairs the LAST BEGIN before the first END that follows
@@ -1264,29 +1357,15 @@ $inj_orph_out"
   # Silence is measured in BYTES, never with `-z` on a $(...) capture. Command substitution
   # strips trailing newlines, so a nudge that printed nothing but a blank line would compare
   # equal to "" and these checks would certify the exact defect they exist to catch:
-  # `wiki-ingest-plan.sh --pending-only` prints nothing at all when nothing is pending, and one
-  # stray newline read back by the counter is a pending rollup named "" — a nag about a week
-  # that does not exist, which no ingest can ever clear.
+  # session-start context spent on nothing, at every session start.
   NUDGEHOOK="$PLUGIN/bin/wiki-nudge.sh"
   NUDGEWEEK="$INJPDIR/memory/episodic/weekly"
 
-  # Sets NUDGE_OUT / NUDGE_RC / NUDGE_BYTES from ONE invocation captured to a file, so the byte
-  # count, the exit status and the text all describe the same run. Deliberately NOT called via
-  # $(...) — that would run it in a subshell and discard all three.
-  #
-  # stdout and stderr both, and the payload redirected from a file rather than piped, for the
-  # reasons inj_run gives. CLAUDE_PROJECT_DIR is unset and CLAUDE_PLUGIN_ROOT pinned to this
-  # checkout for the same reason too: the suite runs inside a Claude Code session that exports
-  # both, and inheriting either would point every check below at the real repo and the
-  # installed plugin instead of the throwaway project and this working tree.
+  # nudge_run <payload-file> [VAR=val ...] -> NUDGE_OUT / NUDGE_RC / NUDGE_BYTES, via hook_run.
   NUDGE_OUT=""; NUDGE_RC=0; NUDGE_BYTES=0
   nudge_run() {
-    local pf="$1"; shift
-    env -u CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" \
-      bash "$NUDGEHOOK" < "$pf" > "$INJTMP/nudge.out" 2>&1
-    NUDGE_RC=$?
-    NUDGE_BYTES="$(wc -c < "$INJTMP/nudge.out" | tr -d '[:space:]')"
-    NUDGE_OUT="$(cat "$INJTMP/nudge.out")"
+    hook_run "$PLUGIN" "$NUDGEHOOK" "$@"
+    NUDGE_OUT="$HOOK_OUT"; NUDGE_RC=$HOOK_RC; NUDGE_BYTES="$HOOK_BYTES"
   }
 
   # The steady state, in its two shapes: a memory dir with no episodic/weekly at all, and one
@@ -1334,8 +1413,8 @@ $nudge_emit_out"
   fi
   # The proof every silence check leans on. Emphatically not `-n "$nudge_emit_out"`: while the
   # script did not exist that variable held bash's "No such file or directory", which satisfies
-  # a bare emptiness guard perfectly — that exact false pass has already happened twice on this
-  # branch. Only the header plus a rendered week name proves the emitting path ran.
+  # a bare emptiness guard perfectly. Only the header plus a rendered week name proves the
+  # emitting path ran.
   nudge_proof=0
   [[ "$nudge_emit_out" == *'## Memory wiki - ingest pending'* \
      && "$nudge_emit_out" == *'2026-W36'* ]] && nudge_proof=1
@@ -1381,67 +1460,26 @@ absent cwd:    rc=$nudge_r4 bytes=$nudge_p4 out=[$nudge_o4]
 emitting run rendered the header and a week name: $nudge_proof (must be 1, or 'silent' proves nothing)"
   fi
 
-  # --- spawn budget (Ruling 3) ---
-  # Same shim technique as the injection budget above, with one addition that matters here:
-  # `bash` is shimmed too. The one process this hook exists to start is a child
-  # `bash bin/wiki-ingest-plan.sh`, and a budget blind to it would be measuring everything
-  # except the thing it is for. Two consequences, both deliberate:
-  #   * every shim's shebang names the real bash by ABSOLUTE PATH instead of the usual
-  #     `/usr/bin/env bash`. With a `bash` shim on PATH, `env bash` resolves to the shim, which
-  #     would log a spurious "bash" for every other shimmed call and run each shim under itself.
-  #   * the hook under test is launched through $NUDGE_REALBASH rather than through PATH, so
-  #     the harness's own invocation is not counted as one of the hook's spawns.
-  NUDGESHIM="$(mktemp -d)"
-  NUDGELOG="$NUDGESHIM/calls.log"; : > "$NUDGELOG"
-  NUDGE_REALBASH="$(command -v bash 2>/dev/null)"
-  [[ -n "$NUDGE_REALBASH" ]] || NUDGE_REALBASH="${BASH:-/bin/bash}"
-  for bin in bash git cygpath sed awk grep tr wc cat head tail cut python python3 \
-             basename dirname realpath readlink; do
-    real="$(command -v "$bin" 2>/dev/null)" || continue
-    [[ -z "$real" ]] && continue
-    cat > "$NUDGESHIM/$bin" <<EOF
-#!$NUDGE_REALBASH
-echo "$bin" >> "$NUDGELOG"
-exec "$real" "\$@"
-EOF
-    chmod +x "$NUDGESHIM/$bin"
-  done
-
-  # Sets NUDGE_SPAWN_OUT and NUDGE_SPAWNS. Not called via $(...), which would discard both.
-  # The PATH assignment is scoped to the inner subshell so the wc/tr that read the log are
-  # never themselves counted.
-  NUDGE_SPAWN_OUT=""; NUDGE_SPAWNS=0
-  nudge_count_spawns() {
-    local pf="$1"; shift
-    : > "$NUDGELOG"
-    NUDGE_SPAWN_OUT="$( PATH="$NUDGESHIM:$PATH"; env -u CLAUDE_PROJECT_DIR \
-      CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" "$NUDGE_REALBASH" "$NUDGEHOOK" < "$pf" 2>/dev/null )"
-    NUDGE_SPAWNS="$(wc -l < "$NUDGELOG" | tr -d ' ')"
-  }
-
-  # Two budgets, enumerated from the shim's own log rather than guessed:
+  # --- spawn budget ---
+  # The shim built for the injection budget above. `bash` is among the shimmed binaries because
+  # the pending calculation once ran as a child `bash wiki-ingest-plan.sh`; a budget blind to
+  # bash would not see one come back.
   #
-  #   payload path (CLAUDE_PROJECT_DIR unset, non-Claude hosts) — 3 processes
+  #   payload path (CLAUDE_PROJECT_DIR unset, non-Claude hosts) — 2 processes
   #     1  python   parse the payload JSON for its cwd
   #     1  git      one `rev-parse` inside wiki_project_dir answers every question it has
-  #     1  bash     the child wiki-ingest-plan.sh, which owns the pending calculation
   #
-  #   fast path (CLAUDE_PROJECT_DIR exported, every real Claude Code session) — 2 processes
-  #     the git and the bash above; python is skipped entirely, and it is the most expensive
-  #     spawn in the set (memory-inject.sh measures python at 1.1 s on Windows)
+  #   fast path (CLAUDE_PROJECT_DIR exported, every real Claude Code session) — 1 process
+  #     the git above; python is skipped entirely
   #
-  # The child is 1 and not 3 because the memory dir is passed to it EXPLICITLY (Ruling 14):
-  # argument-less it would resolve the project a second time inside wiki_project_dir, measured
-  # at ~0.746 s against ~0.155 s. Everything else here is a bash builtin — the pending list is
-  # split with a here-string, not with a `tr`, and joined by parameter expansion, not `paste`.
-  NUDGE_BUDGET=3
-  NUDGE_BUDGET_FAST=2
-  nudge_count_spawns "$INJTMP/payload.json"
-  nudge_got="$NUDGE_SPAWNS"; nudge_budget_out="$NUDGE_SPAWN_OUT"
+  # Everything else is a bash builtin: wiki_pending is sourced from _wiki-pending.sh rather than
+  # run as a child, and the list is joined by parameter expansion, not `paste`.
+  NUDGE_BUDGET=2
+  NUDGE_BUDGET_FAST=1
+  count_spawns "$NUDGEHOOK" "$INJTMP/payload.json"
+  nudge_got="$SPAWNS"; nudge_budget_out="$SPAWN_OUT"
   # The shimmed run must still produce the RIGHT output, or a shim that perturbed the code
-  # under test could report a flattering number for a run that did nothing at all. Both numeric
-  # checks below are gated on this: two budget lines on this branch once reported 0 spawns and
-  # PASSed — the best budget in the suite, for a script that was not there.
+  # under test could report a flattering number for a run that did nothing at all.
   nudge_shim_ok=0
   [[ "$nudge_budget_out" == *'## Memory wiki - ingest pending'* \
      && "$nudge_budget_out" == *'2026-W36'* ]] && nudge_shim_ok=1
@@ -1455,47 +1493,39 @@ EOF
   else
     fail "spawn budget: wiki-nudge.sh" "spawned $nudge_got processes, budget is $NUDGE_BUDGET
 shimmed run printed the nudge: $nudge_shim_ok (0 makes the count above meaningless)
-called: $(sort "$NUDGELOG" | uniq -c | tr '\n' ' ')
+called: $(spawn_calls)
 On Windows each spawn costs 0.15-1.1s in a SessionStart hook."
   fi
 
-  # The fast path, which is the one every real session start takes. Measured separately rather
-  # than inferred from the number above: what is asserted is that the exported cwd actually
-  # removes the python spawn, not merely that it is preferred.
-  : > "$NUDGELOG"
-  nudge_fast_out="$( PATH="$NUDGESHIM:$PATH"; env CLAUDE_PROJECT_DIR="$INJPROJ" \
-    CLAUDE_PLUGIN_ROOT="$PLUGIN" "$NUDGE_REALBASH" "$NUDGEHOOK" \
-    < "$INJTMP/blankcwd.json" 2>/dev/null )"
-  nudge_fast="$(wc -l < "$NUDGELOG" | tr -d ' ')"
-  # No `|| echo 0`: grep -c already prints 0 when it matches nothing, and the fallback would
-  # append a second line, turning the numeric test below into a syntax error on the happy path.
-  nudge_fast_py="$(grep -c '^python' "$NUDGELOG" 2>/dev/null)"; nudge_fast_py="${nudge_fast_py:-0}"
-  # blankcwd.json carries an empty cwd, so output here can only mean CLAUDE_PROJECT_DIR won.
+  # The fast path, measured rather than inferred: what is asserted is that the exported cwd
+  # actually removes the python spawn. blankcwd.json carries an empty cwd, so output here can
+  # only mean CLAUDE_PROJECT_DIR won.
+  count_spawns "$NUDGEHOOK" "$INJTMP/blankcwd.json" CLAUDE_PROJECT_DIR="$INJPROJ"
+  nudge_fast="$SPAWNS"; nudge_fast_py="$SPAWNS_PY"
   nudge_fast_ok=0
-  [[ "$nudge_fast_out" == *'2026-W36'* ]] && nudge_fast_ok=1
+  [[ "$SPAWN_OUT" == *'2026-W36'* ]] && nudge_fast_ok=1
   if (( nudge_fast_ok )) && [[ "$nudge_fast" -le "$NUDGE_BUDGET_FAST" && "$nudge_fast_py" -eq 0 ]]; then
     pass "spawn budget: with CLAUDE_PROJECT_DIR set, $nudge_fast process(es) and no python (budget $NUDGE_BUDGET_FAST)"
   else
     fail "spawn budget: with CLAUDE_PROJECT_DIR set" \
       "spawned $nudge_fast processes (budget $NUDGE_BUDGET_FAST), python calls=$nudge_fast_py
 shimmed run printed the nudge: $nudge_fast_ok (0 makes the count above meaningless)
-called: $(sort "$NUDGELOG" | uniq -c | tr '\n' ' ')"
+called: $(spawn_calls)"
   fi
 
   # ...and the kill switch must cost nothing at all. It is the second line of the script for
   # that reason: a guard that fired only after the memory dir had been resolved would already
   # have spent the whole budget on a user who asked for none of it.
-  nudge_count_spawns "$INJTMP/payload.json" MEMORY_WIKI_NO_NUDGE=1
-  nudge_off_s="$NUDGE_SPAWNS"; nudge_off_sout="$NUDGE_SPAWN_OUT"
-  if (( nudge_shim_ok )) && [[ "$nudge_off_s" -eq 0 && -z "$nudge_off_sout" ]]; then
+  count_spawns "$NUDGEHOOK" "$INJTMP/payload.json" MEMORY_WIKI_NO_NUDGE=1
+  if (( nudge_shim_ok )) && [[ "$SPAWNS" -eq 0 && -z "$SPAWN_OUT" ]]; then
     pass "spawn budget: MEMORY_WIKI_NO_NUDGE short-circuits before any process starts"
   else
     fail "spawn budget: MEMORY_WIKI_NO_NUDGE short-circuits before any process starts" \
-      "spawned $nudge_off_s processes, output=[$nudge_off_sout]
+      "spawned $SPAWNS processes, output=[$SPAWN_OUT]
 shimmed run printed the nudge: $nudge_shim_ok (0 makes the count above meaningless)
-called: $(sort "$NUDGELOG" | uniq -c | tr '\n' ' ')"
+called: $(spawn_calls)"
   fi
-  rm -rf "$NUDGESHIM"
+  rm -rf "$SHIM"
 
   # The ledger closes it, and this is the round trip that matters at session start: wiki-log.sh
   # is the only writer of the `- Sources:` lines and wiki-ingest-plan.sh the only reader, so
@@ -1589,14 +1619,14 @@ fi
 # consumer that motivates the behaviour — the trim exists so the wiki index does not have to
 # share the session-start budget with 200 lines of the same week in prose — and because this
 # repo has exactly one test harness. Nothing in claude-memory knows memory-wiki exists: the
-# whole coupling is one directory name and two heading strings, so it is asserted from the
-# side that depends on it.
+# whole coupling is one file path, the region markers, and the `[[YYYY-Www]]` form the index
+# cites rollups in, so it is asserted from the side that depends on it.
 #
 # What each check is worth, stated up front because check 1 asserts the *unchanged* behaviour
 # and would pass just as happily against a memory-inject.sh in which the trim was never
 # written at all:
-#   * checks 1 and 3 fail if the trim ever fires when it must not (no wiki / scaffolded but
-#     never ingested)
+#   * checks 1 and 3, and the uncovered-week check, fail if the trim ever fires when it must
+#     not (no wiki / scaffolded but never ingested / populated, but not yet with this week)
 #   * check 2 fails if the trim never fires, and its CLAUDE_MEMORY_ROLLUP_FULL half fails if
 #     it always fires
 # The pair is therefore bidirectional: neither "trim removed" nor "trim unconditional" is a
@@ -1632,22 +1662,15 @@ cm_write_rollup() {
     'NEXT_SECTION_MARKER' > "$1"
 }
 
-# cm_run <project-dir> [VAR=val ...] -> sets CM_OUT (stdout+stderr) and CM_RC.
-# Deliberately NOT called via $(...) — that would run it in a subshell and discard both.
-# The payload is written to a file and redirected in, never piped, for the reason inj_run
-# gives. Three variables are pinned rather than inherited, because this suite is itself run
-# from inside a Claude Code session that exports the first two:
-#   CLAUDE_PLUGIN_ROOT        -> claude-memory in THIS checkout, never the installed plugin
-#   CLAUDE_PROJECT_DIR        -> unset, so the payload's cwd is what resolves the project
-#   CLAUDE_MEMORY_ROLLUP_FULL -> unset, or a developer who exported it would turn every trim
-#                                assertion below into an assertion of nothing at all
+# cm_run <project-dir> [VAR=val ...] -> sets CM_OUT (stdout+stderr) and CM_RC, through hook_run
+# with CLAUDE_PLUGIN_ROOT pinned to claude-memory in THIS checkout.
 CM_OUT=""; CM_RC=0
 cm_run() {
   local proj="$1"; shift
   printf '{"session_id":"0000","transcript_path":"","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
     "$proj" > "$CMTMP/payload.json"
-  CM_OUT="$(env -u CLAUDE_PROJECT_DIR -u CLAUDE_MEMORY_ROLLUP_FULL \
-    CLAUDE_PLUGIN_ROOT="$CMROOT" "$@" bash "$CMHOOK" < "$CMTMP/payload.json" 2>&1)"; CM_RC=$?
+  hook_run "$CMROOT" "$CMHOOK" "$CMTMP/payload.json" "$@"
+  CM_OUT="$HOOK_OUT"; CM_RC=$HOOK_RC
 }
 
 # Two throwaway projects, because "no wiki" and "an empty wiki" are different states of the
@@ -1675,14 +1698,19 @@ else
   cm_write_rollup "$CMPDIR/memory/episodic/weekly/2026-W36.md"
   cm_run "$CMPROJ"; cm_nowiki_out="$CM_OUT"; cm_nowiki_rc=$CM_RC
 
-  # --- state 2: the same project, scaffolded and really ingested ---
+  # --- state 2: the same project, scaffolded and really ingested, this week included ---
+  # The typed fixture's pages cite only 2026-W35, so one page citing 2026-W36 is added: the trim
+  # keys on the newest rollup's name appearing in the rendered index.
   bash "$PLUGIN/bin/wiki-init.sh" "$CMPROJ" >/dev/null 2>&1
   cp "$HERE/fixtures/typed/wiki"/*.md "$CMPDIR/memory/wiki/" 2>/dev/null
+  printf '%s\n' '---' 'name: This Week' 'description: a page written from the week under test' \
+    'type: concept' 'status: active' 'last_accessed: 2026-09-08' 'sources: ["[[2026-W36]]"]' \
+    '---' > "$CMPDIR/memory/wiki/concept_this-week.md"
   "$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$CMPDIR/memory/wiki" >/dev/null 2>&1; cm_gen_rc=$?
-  # The premise of check 2, asserted rather than assumed: the guard keys on these two
-  # headings, so an index that never grew one makes "the trim did not fire" mean nothing.
+  # The premise of check 2, asserted rather than assumed: the guard keys on the week's citation,
+  # so an index that never carried one makes "the trim did not fire" mean nothing.
   cm_idx_ok=0
-  grep -qE '^## (Symptoms|Map)' "$CMPDIR/memory/wiki/index.md" 2>/dev/null && cm_idx_ok=1
+  grep -qF '[[2026-W36]]' "$CMPDIR/memory/wiki/index.md" 2>/dev/null && cm_idx_ok=1
   cm_run "$CMPROJ"; cm_trim_out="$CM_OUT"; cm_trim_rc=$CM_RC
   cm_run "$CMPROJ" CLAUDE_MEMORY_ROLLUP_FULL=1; cm_full_out="$CM_OUT"; cm_full_rc=$CM_RC
 
@@ -1697,15 +1725,15 @@ else
   cm_run "$CMPROJ"; cm_cap_out="$CM_OUT"; cm_cap_rc=$CM_RC
   cm_cap_n="$(grep -c '^- thread ' <<< "$cm_cap_out")"; cm_cap_n="${cm_cap_n:-0}"
 
-  # ...and the third guard condition, which the brief's table does not name but its Interfaces
-  # line does: a rollup with no `## Open threads` heading at all. Having nothing to keep means
-  # the full dump, not an empty Tier-2 block — the same wiki that trimmed twice above is still
+  # ...and the third guard condition: a rollup with no `## Open threads` heading at all. Having
+  # nothing to keep means the full dump, not an empty Tier-2 block — the same wiki that trimmed
+  # twice above is still
   # in place, so a pass here can only mean the rollup's own shape decided it.
   printf '%s\n' '# 2026-W36' '' '## Narrative' 'BULK_BODY_MARKER' '' \
     '## Next week' 'NEXT_SECTION_MARKER' > "$CMPDIR/memory/episodic/weekly/2026-W36.md"
   cm_run "$CMPROJ"; cm_noopen_out="$CM_OUT"; cm_noopen_rc=$CM_RC
 
-  # ...and the shape half of a real corpus actually has (Ruling 25). A week consolidated twice
+  # ...and the shape half of a real corpus actually has. A week consolidated twice
   # appends a SECOND `# Week ...` document into the same file, so the rollup carries two
   # `## Open threads` sections with a foreign body between them. Four of the eight rollups in
   # this project's own memory dir look like this, so extracting only the first would drop half
@@ -1727,6 +1755,31 @@ else
     > "$CMPDIR/memory/episodic/weekly/2026-W36.md"
   cm_run "$CMPROJ"; cm_dbl_out="$CM_OUT"; cm_dbl_rc=$CM_RC
   cm_dbl_n="$(grep -c '^## Open threads' <<< "$cm_dbl_out")"; cm_dbl_n="${cm_dbl_n:-0}"
+
+  # ...and the state every project with a wiki is in each week between consolidation and
+  # /memory-wiki:ingest: an index covering earlier weeks, and a newer rollup no page cites yet.
+  # Trimmed, that week would be injected nowhere, so it must be dumped whole. The rollup is dated
+  # into the future so `ls -t` picks it as the latest however quickly this block ran.
+  cm_write_rollup "$CMPDIR/memory/episodic/weekly/2026-W37.md"
+  touch -d '2099-01-01 00:00:00' "$CMPDIR/memory/episodic/weekly/2026-W37.md"
+  cm_run "$CMPROJ"; cm_unc_out="$CM_OUT"; cm_unc_rc=$CM_RC
+  rm -f "$CMPDIR/memory/episodic/weekly/2026-W37.md"
+  cm_bad=""
+  [[ $cm_unc_rc -eq 0 ]] || cm_bad="$cm_bad rc=$cm_unc_rc;"
+  # Premise: the trim demonstrably fires on this same project for a week the index does cite.
+  [[ $cm_idx_ok -eq 1 && "$cm_trim_out" != *'BULK_BODY_MARKER'* ]] \
+    || cm_bad="$cm_bad the trim never fired on this project, so its not firing here proves nothing;"
+  grep -qF '[[2026-W37]]' "$CMPDIR/memory/wiki/index.md" 2>/dev/null \
+    && cm_bad="$cm_bad the index cites 2026-W37, so this is not the case under test;"
+  for needle in '### 2026-W37.md' 'BULK_BODY_MARKER' 'NEXT_SECTION_MARKER'; do
+    [[ "$cm_unc_out" == *"$needle"* ]] || cm_bad="$cm_bad missing: $needle;"
+  done
+  if [[ -z "$cm_bad" ]]; then
+    pass "interop: a populated wiki that has not ingested the newest week keeps its full rollup"
+  else
+    fail "interop: a populated wiki that has not ingested the newest week keeps its full rollup" "$cm_bad
+$cm_unc_out"
+  fi
 
   # --- state 3: a second project, /memory-wiki:init run and nothing ingested ---
   mkdir -p "$CMPDIR2/memory/episodic/weekly"
@@ -1759,7 +1812,7 @@ $cm_nowiki_out"
   cm_bad=""
   [[ $cm_gen_rc -eq 0 ]] || cm_bad="$cm_bad generator rc=$cm_gen_rc;"
   [[ $cm_idx_ok -eq 1 ]] \
-    || cm_bad="$cm_bad index.md carries no ^## Symptoms/Map heading, so nothing here could have triggered the trim;"
+    || cm_bad="$cm_bad index.md does not cite [[2026-W36]], so nothing here could have triggered the trim;"
   [[ $cm_trim_rc -eq 0 && $cm_full_rc -eq 0 && $cm_cap_rc -eq 0 && $cm_noopen_rc -eq 0 \
      && $cm_dbl_rc -eq 0 ]] \
     || cm_bad="$cm_bad rc trim=$cm_trim_rc full=$cm_full_rc cap=$cm_cap_rc no-open=$cm_noopen_rc doubled=$cm_dbl_rc;"
@@ -1824,8 +1877,8 @@ $cm_dbl_out"
   fi
 
   # Check 3. /memory-wiki:init and no ingest: the user would otherwise lose the rollup and
-  # gain nothing, which is the whole reason the guard keys on a populated heading rather than
-  # on the wiki directory existing.
+  # gain nothing, which is one reason the guard keys on the week being cited in the index
+  # rather than on the wiki directory existing.
   cm_bad=""
   [[ $cm_empty_rc -eq 0 ]] || cm_bad="$cm_bad rc=$cm_empty_rc;"
   [[ $cm_empty_idx -eq 1 ]] \
@@ -1856,13 +1909,8 @@ rm -rf "$CMPROJ" "$CMPROJ2" "$CMTMP"
 # The literal is pinned, not merely the agreement: 0.3.5 already shipped WITHOUT this trim, so
 # a checkout that carries the behaviour while still claiming 0.3.5 is describing a plugin that
 # behaves differently from the one the user installed. Bump this line with the version.
-CMPJ="$CMROOT/.claude-plugin/plugin.json"
-cm_pv="$("$PYBIN" -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$CMPJ" 2>&1)"
-cm_mv="$("$PYBIN" -c "
-import json,sys
-m=json.load(open(sys.argv[1]))
-e=[p for p in m['plugins'] if p['name']=='claude-memory']
-print(e[0]['version'] if e else 'MISSING')" "$MJ" 2>&1)"
+cm_pv="$(plugin_version "$CMROOT")"
+cm_mv="$(marketplace_version claude-memory)"
 if [[ "$cm_pv" == "$cm_mv" && "$cm_pv" == "0.3.6" ]]; then
   pass "interop: claude-memory version parity ($cm_pv)"
 else
@@ -1888,4 +1936,5 @@ else
   echo "SKIP: smoke: real memory dir (none on this machine)"
 fi
 
+rm -rf "$HOOKCAP"
 exit "$FAILED"

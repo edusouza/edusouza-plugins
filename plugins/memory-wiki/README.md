@@ -111,7 +111,7 @@ captures are still in `inbox/consumed/`.
 | `MEMORY_WIKI_NO_INJECT` | you | Any non-empty value: `wiki-inject.sh` exits before doing anything. No index at session start, zero processes spawned. |
 | `MEMORY_WIKI_NO_NUDGE` | you | Any non-empty value: same, for `wiki-nudge.sh`. No pending-rollup reminder. |
 | `CLAUDE_MEMORY_CONSOLIDATING` | `claude-memory` | Set to `1` around its headless consolidation run. **Every hook here exits immediately** — the recursion guard, matching `claude-memory`'s own. Not yours to set. |
-| `CLAUDE_MEMORY_ROLLUP_FULL` | you, for `claude-memory` | Belongs to the other plugin. Once this wiki's index is populated, `claude-memory` stops dumping up to 200 lines of the latest weekly rollup at session start and injects only its `## Open threads` sections (capped at 60 lines), because the wiki now covers the same week topically. `=1` restores the full dump. |
+| `CLAUDE_MEMORY_ROLLUP_FULL` | you, for `claude-memory` | Belongs to the other plugin. Once this wiki's index cites the latest weekly rollup — that is, once at least one page was written from that week — `claude-memory` stops dumping up to 200 lines of it at session start and injects only its `## Open threads` sections (capped at 60 lines), because the wiki now covers that week topically. `=1` restores the full dump. |
 
 `MEMORY_WIKI_ATLAS_DIR` also appears in `wiki-inject.sh`, but **it is not a user-facing setting** and
 is documented here only so nobody mistakes it for one: it exists so the test suite can drive the
@@ -187,9 +187,9 @@ No framework, no dependencies beyond the above. What it covers:
 - **Hook checks driven with real payload JSON** — both hooks fed an actual `SessionStart` payload on
   stdin: what they emit, that they are silent on every failure path, that the opt-outs and the
   recursion guard hold, and their measured spawn budgets under a `PATH` shim that logs every call.
-- **`claude-memory` interop** — that a populated wiki index trims the other plugin's rollup injection
-  to its open threads, that no wiki and an empty wiki leave it byte-for-byte unchanged, and that
-  `CLAUDE_MEMORY_ROLLUP_FULL` restores the dump.
+- **`claude-memory` interop** — that an index citing the latest week trims the other plugin's rollup
+  injection to its open threads, that no wiki, an empty wiki, and a populated wiki that has not yet
+  ingested the latest week leave it unchanged, and that `CLAUDE_MEMORY_ROLLUP_FULL` restores the dump.
 - **Version parity for both plugins** — `plugin.json` against the root `marketplace.json`, for
   `memory-wiki` and for `claude-memory`.
 - A shape-only smoke test against a real memory dir, skipped when this machine has none.

@@ -70,13 +70,19 @@ MEMDIR="$(mem_project_dir "$CWD_RAW")/memory"
       # reproduces. So in that one case we inject that section — every occurrence of it, capped
       # at 60 lines in total — instead of 200 lines of prose the model reads again in the index.
       #
-      # The trigger is a POPULATED index, not the existence of <memdir>/wiki/: the `## Symptoms`
-      # and `## Map` headings appear only when the renderer had real pages to work with, so a
-      # user who runs /memory-wiki:init and never ingests keeps the whole rollup instead of
-      # losing it and gaining nothing. With no wiki at all — the majority of projects — nothing
-      # here changes, byte for byte, and the `-f` test that decides so is a bash builtin, so
-      # that path pays no extra process. Escape hatch: CLAUDE_MEMORY_ROLLUP_FULL=1 restores the
-      # full dump unconditionally, wiki or no wiki.
+      # The trigger is THIS WEEK CITED BY THE INDEX — not the existence of <memdir>/wiki/, and
+      # not merely a populated index. The region memory-wiki renders between its markers lists
+      # every rollup its pages were written from as `[[YYYY-Www]]`, so the newest rollup's name
+      # appearing there means a page covers that week. A wiki holding only earlier weeks — every
+      # project's state between consolidation and /memory-wiki:ingest — keeps the whole rollup,
+      # because trimming it then would inject that week nowhere: not here, and not in a wiki that
+      # has not ingested it yet. The same holds for a wiki that was scaffolded and never
+      # ingested. The index is asked rather than wiki/log.md because a logged run may create no
+      # pages at all, and a week no page holds is not covered.
+      #
+      # With no wiki at all — the majority of projects — nothing here changes, byte for byte, and
+      # the `-f` test that decides so is a bash builtin, so that path pays no extra process.
+      # Escape hatch: CLAUDE_MEMORY_ROLLUP_FULL=1 restores the full dump unconditionally.
       #
       # Both scans are `while read` loops rather than a grep/sed/awk per candidate: this runs in
       # a SessionStart hook and on Windows every spawn costs 0.15-1.1s (see the header note).
@@ -85,11 +91,16 @@ MEMDIR="$(mem_project_dir "$CWD_RAW")/memory"
             && -f "$MEMDIR/wiki/index.md" && -r "$MEMDIR/wiki/index.md" ]]; then
         # `-f` rather than `-r` alone on purpose: a directory or a FIFO at index.md satisfies
         # `-r`, and reading one here would print an error or block forever at session start.
-        WIKI_COVERS=0 RLINE=""
+        WEEK="${LASTWK##*/}"; WEEK="${WEEK%.md}"
+        WIKI_COVERS=0 IN_REGION=0 RLINE=""
         while IFS= read -r RLINE || [[ -n "$RLINE" ]]; do
-          if [[ "$RLINE" == '## Symptoms'* || "$RLINE" == '## Map'* ]]; then
-            WIKI_COVERS=1; break
-          fi
+          # Only inside the managed markers: anything outside them is not the rendered index.
+          # A trailing CR is absorbed by every pattern ending in `*`.
+          case "$RLINE" in
+            '<!-- BEGIN memory-wiki'*) IN_REGION=1 ;;
+            '<!-- END memory-wiki'*)   IN_REGION=0 ;;
+            *"[[$WEEK]]"*)             (( IN_REGION )) && { WIKI_COVERS=1; break; } ;;
+          esac
         done 2>/dev/null < "$MEMDIR/wiki/index.md"
         if (( WIKI_COVERS )); then
           # EVERY `## Open threads` section, each running to the next heading that closes it,

@@ -37,6 +37,11 @@ tell the user to run `/memory-wiki:init`. Do not scaffold anything yourself. Tha
 printed on **stderr**, not stdout — with stderr discarded you see an empty work order and no
 explanation, so keep it (`2>&1`).
 
+If `## Existing pages` reads `(unavailable)`, the page list could not be read — python is missing,
+or a page in the wiki is not valid UTF-8 — and the error naming the cause is printed with the work
+order. Stop and report that error. Do not write pages without the list: you cannot tell which
+already exist, and the index cannot be regenerated until it is fixed either.
+
 Do not re-derive any of this by globbing. `wiki-ingest-plan.sh` reports the single implementation of
 "pending" — the same one the session-start nudge calls — and a second opinion about it is a week
 silently missing from the wiki.
