@@ -69,6 +69,32 @@ run_fixture casing
 run_fixture schema --sources "$HERE/fixtures/schema/sources"
 run_fixture typed --sources "$HERE/fixtures/typed/sources" --concepts "$HERE/fixtures/typed/concepts"
 
+# --- lint: a flag that came last with no value must terminate ---
+# `shift 2` shifts nothing and returns non-zero when there is no $2, so a bare `shift 2` spins
+# the option loop forever rather than reporting anything. The caller that makes this reachable
+# is a model — skills/ingest/SKILL.md passes two of these flags in its verify step — and a Bash
+# call that never returns is the worst failure shape this plugin has.
+#
+# `timeout` IS the assertion here, not a safety net: rc 124 is "still running", which is exactly
+# the regression. Without the bound a reintroduced hang would wedge this suite instead of failing.
+if command -v timeout >/dev/null 2>&1; then
+  argv_bad=""
+  for argv_flag in --sources --atlas --concepts; do
+    timeout 5 bash "$PLUGIN/bin/wiki-lint.sh" "$HERE/fixtures/clean/wiki" "$argv_flag" \
+      >/dev/null 2>&1
+    argv_rc=$?
+    [[ $argv_rc -eq 0 ]] || argv_bad="$argv_bad $argv_flag(rc=$argv_rc)"
+  done
+  if [[ -z "$argv_bad" ]]; then
+    pass "lint: a valueless trailing flag terminates"
+  else
+    fail "lint: a valueless trailing flag terminates" \
+      "non-zero rc (124 = still running when the bound expired):$argv_bad"
+  fi
+else
+  echo "SKIP: lint: valueless trailing flag (no timeout on this machine)"
+fi
+
 # --- wiki-index.py: render half, golden-tested against the same typed fixture ---
 # CR is stripped from both sides for the same reason the PowerShell parity check
 # strips it: the content under test is the render, not which host produced the
@@ -79,6 +105,74 @@ if [[ "$idx_out" == "$idx_exp" ]]; then
   pass "index: render"
 else
   fail "index: render" "$(diff <(echo "$idx_exp") <(echo "$idx_out") || true)"
+fi
+
+# --- index: machinery files are never read as pages ---
+# _SKIP is what keeps index.md, log.md and README.md out of the page set, and none of the
+# fixtures contains one, so the constant shipped unexercised: emptying it left every golden
+# green. It is not cosmetic — index.md is a file this script itself writes, so a regression
+# feeds the generator's own output back in as a page on the very next run.
+#
+# The three machinery files here carry *valid page frontmatter*, symptom and all. That is the
+# whole point: `-s`-style presence would prove nothing, and only a page-shaped one can show up
+# in the render if the skip stops working.
+SKPWIKI="$(mktemp -d)"
+for skp in index log README; do
+  printf '%s\n' '---' "name: Machinery $skp" \
+    "description: MACHINERY_$skp must never be rendered as a page" \
+    'type: project' 'status: active' 'last_accessed: 2026-09-08' \
+    "symptom: \"MACHINERY_$skp\"" 'sources: ["[[2026-W99]]"]' '---' > "$SKPWIKI/$skp.md"
+done
+printf '%s\n' '---' 'name: Real Page' 'description: the only page here' \
+  'type: project' 'status: active' 'last_accessed: 2026-09-08' \
+  'sources: ["[[2026-W35]]"]' '---' > "$SKPWIKI/project_real.md"
+skp_out="$("$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$SKPWIKI" --render-only 2>&1 | tr -d '\r')"
+skp_want='## Map
+- [[project_real]] — the only page here
+
+## Sources ingested
+[[2026-W35]]'
+rm -rf "$SKPWIKI"
+if [[ "$skp_out" == "$skp_want" ]]; then
+  pass "index: index/log/README are never rendered as pages"
+else
+  fail "index: index/log/README are never rendered as pages" \
+    "$(diff <(echo "$skp_want") <(echo "$skp_out") || true)"
+fi
+
+# --- index: sources: parses the same way wiki-lint.sh scans it ---
+# Two parsers read this one field. wiki-lint.sh scans the raw line with `\[\[[^]|#]*`, so a
+# bracketless comma list is two resolvable links to it; parse_list read the whole value as one
+# name ("2026-W35]], [[2026-W36") and rendered that into the injected region as a broken link,
+# while lint went on reporting clean. The bracketless form is what a model writes — it is
+# reading a format full of [[...]] — so it is the realistic input, not a contrived one.
+#
+# The assertion is the deduplicated Sources line across BOTH spellings: with the two parsers
+# disagreeing the set holds three names instead of two and each source is listed twice.
+SRCWIKI="$(mktemp -d)"; SRCSRC="$(mktemp -d)"
+: > "$SRCSRC/2026-W35.md"; : > "$SRCSRC/2026-W36.md"
+printf '%s\n' '---' 'name: Flow Form' 'description: sources as a YAML flow list' \
+  'type: project' 'status: active' 'last_accessed: 2026-09-08' \
+  'sources: ["[[2026-W35]]", "[[2026-W36]]"]' '---' \
+  'Links [[project_bare-form]].' > "$SRCWIKI/project_flow-form.md"
+printf '%s\n' '---' 'name: Bare Form' 'description: the same two sources, no flow brackets' \
+  'type: project' 'status: active' 'last_accessed: 2026-09-08' \
+  'sources: [[2026-W35]], [[2026-W36]]' '---' \
+  'Links [[project_flow-form]].' > "$SRCWIKI/project_bare-form.md"
+src_out="$("$PYBIN" "$PLUGIN/bin/wiki-index.py" --wiki "$SRCWIKI" --render-only 2>&1 | tr -d '\r' \
+  | sed -n '/^## Sources ingested$/{n;p;}')"
+src_lint="$(bash "$PLUGIN/bin/wiki-lint.sh" "$SRCWIKI" --sources "$SRCSRC" 2>&1)"
+rm -rf "$SRCWIKI" "$SRCSRC"
+src_bad=""
+[[ "$src_out" == '[[2026-W35]], [[2026-W36]]' ]] \
+  || src_bad="$src_bad rendered Sources line: [$src_out];"
+grep -qE '^  broken links +: 0$' <<< "$src_lint" \
+  || src_bad="$src_bad lint did not report 0 broken links;"
+if [[ -z "$src_bad" ]]; then
+  pass "index: a bracketless comma list in sources: parses as wiki-lint.sh reads it"
+else
+  fail "index: a bracketless comma list in sources: parses as wiki-lint.sh reads it" "$src_bad
+$src_lint"
 fi
 
 # --- path helpers ---
@@ -224,6 +318,25 @@ if [[ $mem_ok -eq 1 ]]; then
   pass "index: MEMORY.md keeps every foreign line and gains our stub"
 else
   fail "index: MEMORY.md keeps every foreign line and gains our stub" "$idx_mem"
+fi
+
+# The stub's literal bytes, and its count. These two lines are the ONLY thing this plugin
+# writes into the file claude-memory and the user share, and every probe above them is a
+# shape check that `Memory wiki: 999 active pages.` would satisfy just as well — so the text
+# a reader actually sees, and the number that tells them whether the wiki is worth opening,
+# were pinned nowhere.
+#
+# The count is load-bearing in both directions. fixtures/typed holds six pages, two of them
+# non-active (one dormant, one superseded), so 4 is simultaneously the assertion that the
+# status filter ran and that nothing outside wiki/*.md was counted. Bump this literal when the
+# fixture gains a page — that edit is the point, not an annoyance.
+idx_stub_want='Memory wiki: 4 active pages.
+Full index (symptoms, map, sources ingested): `wiki/index.md` in this memory dir.'
+if [[ "$idx_stub" == "$idx_stub_want" ]]; then
+  pass "index: the MEMORY.md stub is exactly two lines and counts only active pages"
+else
+  fail "index: the MEMORY.md stub is exactly two lines and counts only active pages" \
+    "$(diff <(echo "$idx_stub_want") <(echo "$idx_stub") || true)"
 fi
 
 # Not merely "a CR survived somewhere": the block we wrote must have adopted the file's own
@@ -499,6 +612,30 @@ if command -v pwsh >/dev/null 2>&1; then
   # contract under test is that the two scripts agree, not that they agree only when fully
   # argumented. Do not widen the helper for this.
   parity typed "$HERE/fixtures/typed/sources"
+
+  # -Concepts, which parity above cannot reach: the helper has no slot for it and widening it
+  # is ruled out just there. So the twin's half of Task 7's new interface — the flag that makes
+  # claude-memory's flat root concept_*.md files resolvable without counting them as pages —
+  # otherwise ships with the bash side goldened and the PowerShell side never once invoked.
+  #
+  # Not a parity assertion and deliberately not goldened: it asserts the one thing the flag is
+  # for. fixtures/typed links [[concept_root-heuristic]] twice, and that file lives in
+  # concepts/, not wiki/ — so 0 broken links can only mean -Concepts was read and honoured.
+  # Without it the same run reports 2. The page count is asserted alongside, because "resolvable
+  # without becoming a page" is one contract and half of it would pass on its own.
+  ps_conc="$(pwsh -NoProfile -File "$PLUGIN/bin/wiki-lint.ps1" \
+    -WikiDir "$HERE/fixtures/typed/wiki" \
+    -Sources "$HERE/fixtures/typed/sources" \
+    -Concepts "$HERE/fixtures/typed/concepts" 2>&1 | tr -d '\r')"
+  conc_bad=""
+  grep -qE '^  broken links +: 0$' <<< "$ps_conc" || conc_bad="$conc_bad broken links is not 0;"
+  grep -qE '^  pages +: 6$' <<< "$ps_conc" || conc_bad="$conc_bad pages is not 6;"
+  if [[ -z "$conc_bad" ]]; then
+    pass "lint.ps1: -Concepts resolves the flat root concepts without counting them"
+  else
+    fail "lint.ps1: -Concepts resolves the flat root concepts without counting them" "$conc_bad
+$ps_conc"
+  fi
 else
   pass "parity: skipped (pwsh not on PATH)"
 fi
